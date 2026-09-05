@@ -6,6 +6,8 @@ from sqlalchemy import text
 
 from backend.database import get_db, engine, Base
 import backend.models as models
+from backend.routes.batches import router as batches_router
+from backend.routes.reconciliation import router as reconciliation_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -31,6 +33,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register Routers
+app.include_router(batches_router)
+app.include_router(reconciliation_router)
 
 @app.get("/health", tags=["Health"])
 def health_check(db: Session = Depends(get_db)):
