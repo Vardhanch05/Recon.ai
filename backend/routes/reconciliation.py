@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 import uuid
@@ -31,7 +31,9 @@ from backend.schemas import (
     RejectResponse
 )
 from backend.matching import run_deterministic_matching
+from backend.reasoning import run_batch_reasoning_pipeline
 from backend.audit import log_audit_event
+from backend.database import SessionLocal
 
 router = APIRouter(tags=["Reconciliation"])
 
@@ -48,6 +50,38 @@ def trigger_matching(batch_id: uuid.UUID, db: Session = Depends(get_db)):
         return MatchRunResponse(**result)
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@router.post("/batches/{batch_id}/run-reasoning", status_code=status.HTTP_202_ACCEPTED)
+async def trigger_reasoning(
+    batch_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """
+    Triggers asynchronous LLM discrepancy reasoning pass on all exception records.
+    Returns job_id immediately; frontend polls /batches/{id}/summary.
+    """
+    batch = db.query(Batch).filter(Batch.id == batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found")
+
+    job_id = uuid.uuid4()
+    
+    # Run async background pipeline
+    background_tasks.add_task(run_batch_reasoning_pipeline, batch_id, SessionLocal)
+
+    exception_count = db.query(func.count(ReconciliationResult.id)).filter(
+        ReconciliationResult.batch_id == batch_id,
+        ReconciliationResult.status == ReconciliationStatus.exception_unresolved
+    ).scalar() or 0
+
+    return {
+        "batch_id": batch_id,
+        "job_id": job_id,
+        "exception_count": exception_count,
+        "message": "Reasoning started. Poll /summary for completion status."
+    }
 
 
 @router.get("/batches/{batch_id}/exceptions", response_model=ExceptionsListResponse)

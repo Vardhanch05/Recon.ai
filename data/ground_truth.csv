@@ -1,0 +1,12 @@
+gateway_txn_id,order_id,true_category,true_cause,expected_residual_gap
+pay_exp_001,ORD_1045,MDR_VARIANCE,2% domestic MDR with 18% GST,0.0
+pay_exp_002,ORD_1046,MDR_VARIANCE,3% international MDR with 18% GST,0.0
+pay_exp_003,ORD_1047,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_exp_004,ORD_1048,PARTIAL_REFUND,Partial customer refund of ₹200 deducted at settlement,0.0
+pay_exp_005,ORD_1049,MDR_VARIANCE,3% international card processing fee plus ₹15 flat cross-border surcharge,0.0
+pay_exp_006,ORD_1050,PARTIAL_REFUND,Partial refund of ₹150 combined with 18% GST on 2% MDR,0.0
+pay_exp_007,ORD_1051,MDR_VARIANCE,"Combined 3% international MDR, 18% GST, flat surcharge, and ₹100 refund",0.0
+pay_exp_008,ORD_1052,FX_ROUNDING,Minor FX conversion rounding adjustment on international settlement,0.0
+pay_unres_001,ORD_1053,UNRESOLVED,Unexplained bank shortfall of ₹350,310.0
+pay_unres_002,ORD_1054,UNRESOLVED,Arbitrary bank holdback of ₹800,700.0
+pay_unres_003,ORD_1055,UNRESOLVED,Unregistered chargeback deduction,490.0
