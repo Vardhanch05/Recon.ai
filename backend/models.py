@@ -2,82 +2,54 @@ import uuid
 import enum
 from datetime import datetime
 from sqlalchemy import (
-    Column,
-    String,
-    Integer,
-    Numeric,
-    DateTime,
-    Boolean,
-    Text,
-    ForeignKey,
-    Enum as SQLEnum,
-    Index,
-    UniqueConstraint
+    Column, String, Float, Integer, Boolean, DateTime, ForeignKey, Enum as SQLEnum,
+    Text, Index, UniqueConstraint, types
 )
-from sqlalchemy.dialects.postgresql import UUID, JSONB
-from sqlalchemy.types import TypeDecorator, CHAR
 from sqlalchemy.orm import relationship
 
-from backend.database import Base
+try:
+    from backend.database import Base
+except ImportError:
+    from database import Base
 
-# Universal UUID type that works across PostgreSQL and SQLite
-class GUID(TypeDecorator):
-    impl = CHAR
+# Cross-database UUID type supporting both PostgreSQL and SQLite
+class GUID(types.TypeDecorator):
+    """Platform-independent GUID type.
+    Uses PostgreSQL's UUID type, otherwise uses CHAR(36), storing as stringifier.
+    """
+    impl = types.CHAR
     cache_ok = True
 
     def load_dialect_impl(self, dialect):
         if dialect.name == 'postgresql':
-            return dialect.type_descriptor(UUID())
+            from sqlalchemy.dialects.postgresql import UUID
+            return dialect.type_descriptor(UUID(as_uuid=True))
         else:
-            return dialect.type_descriptor(CHAR(36))
+            return dialect.type_descriptor(types.CHAR(36))
 
     def process_bind_param(self, value, dialect):
         if value is None:
             return value
         elif dialect.name == 'postgresql':
-            return str(value)
+            return value if isinstance(value, uuid.UUID) else uuid.UUID(str(value))
         else:
-            if isinstance(value, uuid.UUID):
-                return str(value)
-            else:
-                return str(uuid.UUID(value))
+            return str(value)
 
     def process_result_value(self, value, dialect):
         if value is None:
             return value
-        else:
-            if not isinstance(value, uuid.UUID):
-                value = uuid.UUID(value)
+        if isinstance(value, uuid.UUID):
             return value
+        return uuid.UUID(str(value))
 
-
-# Universal JSON type that uses JSONB on PostgreSQL and JSON/Text on SQLite
-class JSONType(TypeDecorator):
-    impl = Text
-    cache_ok = True
-
-    def load_dialect_impl(self, dialect):
-        if dialect.name == 'postgresql':
-            return dialect.type_descriptor(JSONB())
-        else:
-            from sqlalchemy import JSON
-            return dialect.type_descriptor(JSON())
-
-    def process_bind_param(self, value, dialect):
-        return value
-
-    def process_result_value(self, value, dialect):
-        return value
-
-
-# ─────────────────────────────────────────────
-# ENUMS
-# ─────────────────────────────────────────────
 
 class BatchStatus(str, enum.Enum):
     uploaded = "uploaded"
+    matching_in_progress = "matching_in_progress"
     matching_complete = "matching_complete"
+    reasoning_in_progress = "reasoning_in_progress"
     reasoning_complete = "reasoning_complete"
+    approved = "approved"
     failed = "failed"
 
 
@@ -104,6 +76,18 @@ class ResolutionSource(str, enum.Enum):
     human_override = "human_override"
 
 
+class DiscrepancyCategory(str, enum.Enum):
+    MDR_VARIANCE = "MDR_VARIANCE"
+    PARTIAL_REFUND = "PARTIAL_REFUND"
+    FX_ROUNDING = "FX_ROUNDING"
+    DOMESTIC_MDR = "DOMESTIC_MDR"
+    INTERNATIONAL_MDR = "INTERNATIONAL_MDR"
+    GST_ON_FEE = "GST_ON_FEE"
+    FLAT_SURCHARGE = "FLAT_SURCHARGE"
+    COMBINED_DISCREPANCY = "COMBINED_DISCREPANCY"
+    UNRESOLVED = "UNRESOLVED"
+
+
 class AuditEventType(str, enum.Enum):
     ingestion_error = "ingestion_error"
     match = "match"
@@ -113,147 +97,132 @@ class AuditEventType(str, enum.Enum):
     journal_posted = "journal_posted"
 
 
-# ─────────────────────────────────────────────
-# MODELS
-# ─────────────────────────────────────────────
-
 class Batch(Base):
     __tablename__ = "batches"
 
-    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
-    uploaded_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    status = Column(SQLEnum(BatchStatus, name="batch_status"), nullable=False, default=BatchStatus.uploaded)
-    total_records = Column(Integer, nullable=True)
-    ingestion_error_count = Column(Integer, nullable=False, default=0)
-    match_rate_deterministic = Column(Numeric(5, 2), nullable=True)
-    match_rate_ai_resolved = Column(Numeric(5, 2), nullable=True)
-    unresolved_count = Column(Integer, nullable=True)
-    timestamp_tolerance_seconds = Column(Integer, nullable=False, default=2)
+    id = Column(GUID, primary_key=True, default=uuid.uuid4)
+    uploaded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    status = Column(SQLEnum(BatchStatus), default=BatchStatus.uploaded, nullable=False)
+    total_records = Column(Integer, default=0)
+    ingestion_error_count = Column(Integer, default=0)
+    matched_deterministic_count = Column(Integer, default=0)
+    matched_ai_resolved_count = Column(Integer, default=0)
+    match_rate_deterministic = Column(Float, nullable=True)
+    match_rate_ai_resolved = Column(Float, nullable=True)
+    unresolved_count = Column(Integer, default=0)
+    timestamp_tolerance_seconds = Column(Integer, default=2)
+    duration_ms = Column(Integer, default=0)
 
     # Relationships
-    settlement_records = relationship("SettlementRecord", back_populates="batch", cascade="all, delete-orphan")
-    order_ledger_records = relationship("OrderLedger", back_populates="batch", cascade="all, delete-orphan")
-    reconciliation_results = relationship("ReconciliationResult", back_populates="batch", cascade="all, delete-orphan")
+    settlements = relationship("SettlementRecord", back_populates="batch", cascade="all, delete-orphan")
+    ledger_entries = relationship("OrderLedger", back_populates="batch", cascade="all, delete-orphan")
+    results = relationship("ReconciliationResult", back_populates="batch", cascade="all, delete-orphan")
+    audit_logs = relationship("AuditLog", back_populates="batch", cascade="all, delete-orphan")
 
 
 class SettlementRecord(Base):
     __tablename__ = "settlement_records"
 
-    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
-    batch_id = Column(GUID(), ForeignKey("batches.id", ondelete="CASCADE"), nullable=False, index=True)
+    id = Column(GUID, primary_key=True, default=uuid.uuid4)
+    batch_id = Column(GUID, ForeignKey("batches.id", ondelete="CASCADE"), nullable=False)
     gateway_txn_id = Column(String, nullable=False)
-    order_id = Column(String, nullable=True)
-    settled_amount = Column(Numeric(12, 2), nullable=False)
+    order_id = Column(String, nullable=True, index=True)
+    settled_amount = Column(Float, nullable=False)
     settlement_timestamp = Column(DateTime, nullable=False)
-    fee_deducted = Column(Numeric(12, 2), nullable=True)
-    currency = Column(String(3), nullable=False, default="INR")
-    raw_row_json = Column(JSONType(), nullable=False)
+    fee_deducted = Column(Float, nullable=True)
+    currency = Column(String(3), default="INR")
+    raw_row_json = Column(Text, nullable=True)
 
-    # Relationships & Constraints
-    batch = relationship("Batch", back_populates="settlement_records")
-    reconciliation_result = relationship("ReconciliationResult", back_populates="settlement_record", uselist=False)
+    batch = relationship("Batch", back_populates="settlements")
 
     __table_args__ = (
-        UniqueConstraint("batch_id", "gateway_txn_id", name="uq_settlement_txn"),
+        UniqueConstraint("batch_id", "gateway_txn_id", name="uq_batch_gateway_txn"),
     )
 
 
 class OrderLedger(Base):
     __tablename__ = "order_ledger"
 
-    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
-    batch_id = Column(GUID(), ForeignKey("batches.id", ondelete="CASCADE"), nullable=False, index=True)
-    order_id = Column(String, nullable=False)
-    billed_amount = Column(Numeric(12, 2), nullable=False)
+    id = Column(GUID, primary_key=True, default=uuid.uuid4)
+    batch_id = Column(GUID, ForeignKey("batches.id", ondelete="CASCADE"), nullable=False)
+    order_id = Column(String, nullable=False, index=True)
+    billed_amount = Column(Float, nullable=False)
     order_timestamp = Column(DateTime, nullable=False)
-    refund_amount = Column(Numeric(12, 2), nullable=True)
-    is_international = Column(Boolean, nullable=False, default=False)
-    payment_method = Column(String, nullable=True)
-    raw_row_json = Column(JSONType(), nullable=False)
+    refund_amount = Column(Float, default=0.0, nullable=True)
+    is_international = Column(Boolean, default=False)
+    payment_method = Column(String, default="card")
+    raw_row_json = Column(Text, nullable=True)
 
-    # Relationships
-    batch = relationship("Batch", back_populates="order_ledger_records")
+    batch = relationship("Batch", back_populates="ledger_entries")
 
 
 class ReconciliationResult(Base):
     __tablename__ = "reconciliation_results"
 
-    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
-    batch_id = Column(GUID(), ForeignKey("batches.id", ondelete="CASCADE"), nullable=False, index=True)
-    settlement_record_id = Column(GUID(), ForeignKey("settlement_records.id"), nullable=False)
-    order_ledger_id = Column(GUID(), ForeignKey("order_ledger.id"), nullable=True)
-    status = Column(
-        SQLEnum(ReconciliationStatus, name="reconciliation_status"),
-        nullable=False,
-        default=ReconciliationStatus.exception_unresolved
-    )
-    routing_reason = Column(SQLEnum(RoutingReason, name="routing_reason"), nullable=True)
-    discrepancy_amount = Column(Numeric(12, 2), nullable=True)
-    resolution_source = Column(SQLEnum(ResolutionSource, name="resolution_source"), nullable=True)
-    confidence_score = Column(Numeric(3, 2), nullable=True)
+    id = Column(GUID, primary_key=True, default=uuid.uuid4)
+    batch_id = Column(GUID, ForeignKey("batches.id", ondelete="CASCADE"), nullable=False)
+    settlement_record_id = Column(GUID, ForeignKey("settlement_records.id", ondelete="CASCADE"), nullable=False)
+    order_ledger_id = Column(GUID, ForeignKey("order_ledger.id", ondelete="SET NULL"), nullable=True)
+    
+    status = Column(SQLEnum(ReconciliationStatus), nullable=False)
+    routing_reason = Column(SQLEnum(RoutingReason), nullable=True)
+    discrepancy_amount = Column(Float, nullable=True)
+    resolution_source = Column(SQLEnum(ResolutionSource), default=ResolutionSource.rule_engine, nullable=False)
+    confidence_score = Column(Float, nullable=True)
     reviewed_at = Column(DateTime, nullable=True)
     reviewed_by = Column(String, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-    # Relationships & Constraints
-    batch = relationship("Batch", back_populates="reconciliation_results")
-    settlement_record = relationship("SettlementRecord", back_populates="reconciliation_result")
+    batch = relationship("Batch", back_populates="results")
+    settlement_record = relationship("SettlementRecord")
     order_ledger = relationship("OrderLedger")
+    reasoning_card = relationship("ReasoningCard", uselist=False, back_populates="reconciliation_result", cascade="all, delete-orphan")
     exception_candidates = relationship("ExceptionCandidate", back_populates="reconciliation_result", cascade="all, delete-orphan")
-    reasoning_card = relationship("ReasoningCard", back_populates="reconciliation_result", uselist=False, cascade="all, delete-orphan")
 
     __table_args__ = (
-        UniqueConstraint("batch_id", "settlement_record_id", name="uq_result_per_settlement"),
-        Index("idx_results_status", "batch_id", "status"),
+        UniqueConstraint("batch_id", "settlement_record_id", name="uq_batch_settlement_reconciliation"),
     )
 
 
 class ExceptionCandidate(Base):
     __tablename__ = "exception_candidates"
 
-    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
-    reconciliation_result_id = Column(GUID(), ForeignKey("reconciliation_results.id", ondelete="CASCADE"), nullable=False)
-    order_ledger_id = Column(GUID(), ForeignKey("order_ledger.id"), nullable=False)
+    id = Column(GUID, primary_key=True, default=uuid.uuid4)
+    reconciliation_result_id = Column(GUID, ForeignKey("reconciliation_results.id", ondelete="CASCADE"), nullable=False)
+    order_ledger_id = Column(GUID, ForeignKey("order_ledger.id", ondelete="CASCADE"), nullable=False)
 
-    # Relationships & Constraints
     reconciliation_result = relationship("ReconciliationResult", back_populates="exception_candidates")
     order_ledger = relationship("OrderLedger")
-
-    __table_args__ = (
-        UniqueConstraint("reconciliation_result_id", "order_ledger_id", name="uq_candidate"),
-    )
 
 
 class ReasoningCard(Base):
     __tablename__ = "reasoning_cards"
 
-    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
-    reconciliation_result_id = Column(GUID(), ForeignKey("reconciliation_results.id", ondelete="CASCADE"), nullable=False)
+    id = Column(GUID, primary_key=True, default=uuid.uuid4)
+    reconciliation_result_id = Column(GUID, ForeignKey("reconciliation_results.id", ondelete="CASCADE"), unique=True, nullable=False)
+    
     hypothesis_text = Column(Text, nullable=False)
-    calculation_breakdown = Column(JSONType(), nullable=False)
-    confidence_score = Column(Numeric(3, 2), nullable=False)
+    calculation_breakdown = Column(Text, nullable=False)  # JSON string
+    confidence_score = Column(Float, nullable=False)
     suggested_category = Column(String, nullable=False)
-    requires_human_review = Column(Boolean, nullable=False, default=True)
+    requires_human_review = Column(Boolean, default=True)
     human_override_note = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-    # Relationships & Constraints
     reconciliation_result = relationship("ReconciliationResult", back_populates="reasoning_card")
-
-    __table_args__ = (
-        UniqueConstraint("reconciliation_result_id", name="uq_reasoning_card_result"),
-        Index("idx_cards_result", "reconciliation_result_id"),
-    )
 
 
 class AuditLog(Base):
     __tablename__ = "audit_log"
 
-    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
-    batch_id = Column(GUID(), nullable=False)
-    event_type = Column(SQLEnum(AuditEventType, name="audit_event_type"), nullable=False)
-    actor = Column(String, nullable=False)
-    payload_json = Column(JSONType(), nullable=False)
-    timestamp = Column(DateTime, nullable=False, default=datetime.utcnow)
+    id = Column(GUID, primary_key=True, default=uuid.uuid4)
+    batch_id = Column(GUID, ForeignKey("batches.id", ondelete="CASCADE"), nullable=True)
+    event_type = Column(SQLEnum(AuditEventType), nullable=False)
+    actor = Column(String, default="system", nullable=False)
+    payload_json = Column(Text, nullable=True)  # JSON string
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    batch = relationship("Batch", back_populates="audit_logs")
 
     __table_args__ = (
         Index("idx_audit_batch_time", "batch_id", "timestamp"),
