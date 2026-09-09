@@ -1,0 +1,29 @@
+File Summary (One-Paragraph Note)
+backend/models.py is the core database schema blueprint and domain state machine of the entire reconciliation backend. It translates business rules into 7 relational database tables 
+(Batch, SettlementRecord, OrderLedger, ReconciliationResult, ExceptionCandidate, ReasoningCard, and AuditLog)
+and defines strict PostgreSQL Enum types for batch states, reconciliation statuses, discrepancy categories, and audit events. 
+This file is critical to the project because it enforces financial data integrity, idempotency, and non-repudiation 
+at the database layer through UUID primary keys, foreign key cascading deletes, unique constraints (preventing double-processing or duplicate matching), 
+and composite indexing for high-speed audit log retrieval.
+
+🔑 Key Concepts, Types & SQLAlchemy Functions Used
+
+1. Base (declarative_base)	The foundational SQLAlchemy class that all 7 model classes inherit from to register them with the ORM metadata.
+2. UUID(as_uuid=True)	Used for all primary keys and foreign keys instead of sequential auto-incrementing integers (1, 2, 3) to prevent ID enumeration attacks and collision risks across distributed services.
+3. enum.Enum & SQLEnum	Used to create strict PostgreSQL ENUM types (BatchStatus, ReconciliationStatus, DiscrepancyCategory, AuditEventType), making invalid financial state transitions impossible at the database level.
+4. ForeignKey(..., ondelete="CASCADE")	Enforces relational integrity between parent tables (like batches) and child tables. If a batch is deleted, all its linked transactions, cards, and audit logs are cleaned up automatically without leaving orphaned records.
+5. relationship(..., back_populates=...)	Creates bidirectional Python-level object navigation between parent and child models (e.g., accessing batch.settlements or result.reasoning_card).
+6. UniqueConstraint	Enforces idempotency at the database level:
+    uq_batch_gateway_txn stops duplicate CSV row imports.
+    uq_batch_settlement_reconciliation guarantees a payout record cannot be matched twice.
+7. Index("idx_audit_batch_time", ...)	Creates a composite B-tree database index across (batch_id, timestamp) to ensure audit trail queries execute in sub-millisecond time.
+8. JSON	Stores dynamic, structured data such as raw CSV rows (raw_payload), AI arithmetic step logs (calculation_breakdown), and audit snapshots (payload).
+9. uselist=False	Used in the ReasoningCard relationship to enforce a strict 1-to-1 relationship with a ReconciliationResult.
+
+💡 Explainability Tip for Interviews / Project Reviews
+If asked: "How does your backend ensure financial safety and data integrity?" Your answer:
+
+"In models.py, we don't rely solely on application code for safety. 
+We enforce data integrity directly in the database schema using UUID keys, 
+strict PostgreSQL ENUM state machines, composite indexing, and database-level UniqueConstraints 
+that make duplicate ingestion and double-matching mathematically and architecturally impossible."

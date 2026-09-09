@@ -1,0 +1,27 @@
+File Summary (One-Paragraph Note)
+backend/database.py initializes the relational database engine, establishes the ORM declarative Base class, and creates the SessionLocal factory. Its core responsibility is providing the get_db() dependency injection generator to FastAPI routes, ensuring that every incoming HTTP request receives an isolated, thread-safe database transaction staging area that is guaranteed to close and return connections to the pool upon request completion.
+
+🔑 Key Concepts, Types & SQLAlchemy Functions Used
+
+1. from sqlalchemy import create_engine
+   Creates and maintains the connection pool to PostgreSQL or SQLite. Reuses open TCP connections to avoid reconnection latency overhead.
+
+2. from sqlalchemy.orm import declarative_base
+   Constructs the ORM Base class that links all model classes in models.py to the SQL schema catalog.
+
+3. from sqlalchemy.orm import sessionmaker
+   Factory that creates database Session objects representing active transactions.
+
+4. autocommit=False, autoflush=False
+   Enforces ACID transaction safety: changes only persist when explicitly committed via db.commit(), enabling safe rollbacks on failure.
+
+5. connect_args = {"check_same_thread": False}
+   Allows SQLite to share connections across multiple threads during local testing without throwing threading exceptions.
+
+6. get_db() with yield & finally: db.close()
+   FastAPI Dependency Injection pattern that prevents connection pool exhaustion and memory leaks.
+
+💡 Explainability Tip for Interviews / Project Reviews
+If asked: "How does your backend handle database connection pooling and lifecycle management?"
+Your answer:
+"In database.py, we configure SQLAlchemy's engine with a SessionLocal factory and expose a get_db() generator using FastAPI's dependency injection. By wrapping the session in a try-finally block with yield, we ensure that every HTTP request operates in its own transaction context and automatically returns the connection to the pool when the response completes, completely eliminating database connection leaks."

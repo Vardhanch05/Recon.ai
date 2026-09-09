@@ -1,0 +1,11 @@
+backend/config.py is the application's environment configuration module. 
+It uses python-dotenv and Python’s built-in os.getenv to securely read runtime parameters 
+(database connection string, Groq LPU API keys, LLM model selection, request timeouts, and server host/port) with safe default fallbacks, decoupling environment secrets from the application source code.
+
+
+Key Keywords & Functions:
+
+1. load_dotenv(): Parses the local .env file and populates os.environ during application boot.
+2. os.getenv(KEY, DEFAULT): Reads a system variable safely with a default fallback so the server can run locally even if .env is missing.
+3. int(...) casting: Explicitly casts string environment variables (like PORT="8000") into Python integers to prevent type errors in network listeners.
+4. GROQ_API_KEY & llama-3.3-70b-versatile: High-speed LLM inference endpoint tailored for rapid function-calling and discrepancy evaluation.
