@@ -18,7 +18,7 @@ from backend.models import (
     AuditEventType
 )
 from backend.audit import log_audit_event
-from backend.config import OPENAI_API_KEY, LLM_MODEL, LLM_TIMEOUT_SECONDS
+from backend.config import GROQ_API_KEY, LLM_MODEL, LLM_TIMEOUT_SECONDS
 
 
 # ─────────────────────────────────────────────

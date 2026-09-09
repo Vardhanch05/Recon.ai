@@ -8,8 +8,9 @@ import uuid
 
 client = TestClient(app)
 
-@pytest.mark.asyncio
-async def test_full_reconciliation_pipeline():
+import asyncio
+
+def test_full_reconciliation_pipeline():
     # 1. Read synthetic datasets
     with open("data/synthetic_batch.csv", "rb") as f:
         settle_bytes = f.read()
@@ -37,7 +38,7 @@ async def test_full_reconciliation_pipeline():
     assert match_data["match_rate_deterministic_pct"] == 80.0
 
     # 4. Run Reasoning Pipeline synchronously in test
-    await run_batch_reasoning_pipeline(uuid.UUID(batch_id), TestingSessionLocal)
+    asyncio.run(run_batch_reasoning_pipeline(uuid.UUID(batch_id), TestingSessionLocal))
 
     # 5. Check Summary after Reasoning Complete
     summary_res = client.get(f"/batches/{batch_id}/summary")
