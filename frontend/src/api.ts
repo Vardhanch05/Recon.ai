@@ -1,6 +1,15 @@
 import type { BatchSummary, ExceptionItem, AuditLogItem, AccuracyReport } from './types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_KEY = import.meta.env.VITE_API_KEY || '';
+
+function getAuthHeaders(extraHeaders: Record<string, string> = {}): Record<string, string> {
+  const headers: Record<string, string> = { ...extraHeaders };
+  if (API_KEY) {
+    headers['X-API-Key'] = API_KEY;
+  }
+  return headers;
+}
 
 export async function uploadBatch(
   settlementFile: File,
@@ -14,6 +23,7 @@ export async function uploadBatch(
 
   const res = await fetch(`${API_BASE_URL}/batches/upload`, {
     method: 'POST',
+    headers: getAuthHeaders(),
     body: formData,
   });
 
@@ -34,6 +44,7 @@ export async function runMatching(batchId: string): Promise<{
 }> {
   const res = await fetch(`${API_BASE_URL}/batches/${batchId}/run-matching`, {
     method: 'POST',
+    headers: getAuthHeaders(),
   });
 
   if (!res.ok) {
@@ -52,6 +63,7 @@ export async function runReasoning(batchId: string): Promise<{
 }> {
   const res = await fetch(`${API_BASE_URL}/batches/${batchId}/run-reasoning`, {
     method: 'POST',
+    headers: getAuthHeaders(),
   });
 
   if (!res.ok) {
@@ -63,7 +75,9 @@ export async function runReasoning(batchId: string): Promise<{
 }
 
 export async function getBatchSummary(batchId: string): Promise<BatchSummary> {
-  const res = await fetch(`${API_BASE_URL}/batches/${batchId}/summary`);
+  const res = await fetch(`${API_BASE_URL}/batches/${batchId}/summary`, {
+    headers: getAuthHeaders(),
+  });
   if (!res.ok) {
     const errorData = await res.json().catch(() => ({}));
     throw new Error(errorData.detail || 'Failed to fetch batch summary');
@@ -81,7 +95,9 @@ export async function getExceptions(
   if (status) {
     url += `&status=${status}`;
   }
-  const res = await fetch(url);
+  const res = await fetch(url, {
+    headers: getAuthHeaders(),
+  });
   if (!res.ok) {
     const errorData = await res.json().catch(() => ({}));
     throw new Error(errorData.detail || 'Failed to fetch exceptions list');
@@ -95,7 +111,7 @@ export async function approveCard(
 ): Promise<{ result_id: string; status: string; journal_posted: boolean; reviewed_at: string }> {
   const res = await fetch(`${API_BASE_URL}/reconciliation/${resultId}/approve`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ reviewed_by: reviewedBy }),
   });
 
@@ -118,7 +134,7 @@ export async function rejectCard(
 ): Promise<{ result_id: string; status: string; reviewed_at: string }> {
   const res = await fetch(`${API_BASE_URL}/reconciliation/${resultId}/reject`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ reviewed_by: reviewedBy, override_note: overrideNote }),
   });
 
@@ -142,7 +158,9 @@ export async function getAuditLog(
   if (eventType) {
     url += `?event_type=${eventType}`;
   }
-  const res = await fetch(url);
+  const res = await fetch(url, {
+    headers: getAuthHeaders(),
+  });
   if (!res.ok) {
     const errorData = await res.json().catch(() => ({}));
     throw new Error(errorData.detail || 'Failed to fetch audit log');
@@ -151,7 +169,9 @@ export async function getAuditLog(
 }
 
 export async function getAccuracyReport(batchId: string): Promise<AccuracyReport> {
-  const res = await fetch(`${API_BASE_URL}/batches/${batchId}/accuracy-report`);
+  const res = await fetch(`${API_BASE_URL}/batches/${batchId}/accuracy-report`, {
+    headers: getAuthHeaders(),
+  });
   if (!res.ok) {
     const errorData = await res.json().catch(() => ({}));
     throw new Error(errorData.detail || 'Failed to fetch accuracy report');
@@ -160,9 +180,12 @@ export async function getAccuracyReport(batchId: string): Promise<AccuracyReport
 }
 
 export async function checkBackendHealth(): Promise<{ status: string; app: string; database: string }> {
-  const res = await fetch(`${API_BASE_URL}/health`);
+  const res = await fetch(`${API_BASE_URL}/health`, {
+    headers: getAuthHeaders(),
+  });
   if (!res.ok) {
     throw new Error('Backend unreachable');
   }
   return res.json();
 }
+

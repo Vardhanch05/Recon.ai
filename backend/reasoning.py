@@ -1,9 +1,10 @@
 import json
 import uuid
 import os
-import asyncio # for asynchronous background task completion
+import logging
+import asyncio
 from typing import Dict, Any, Tuple, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from backend.models import (
@@ -15,10 +16,13 @@ from backend.models import (
     OrderLedger,
     ReasoningCard,
     ExceptionCandidate,
-    AuditEventType
+    AuditEventType,
+    ResolutionSource
 )
 from backend.audit import log_audit_event
 from backend.config import GROQ_API_KEY, LLM_MODEL, LLM_TIMEOUT_SECONDS
+
+logger = logging.getLogger(__name__)
 
 
 # --- 1. CORE CONFIDENCE & VALIDATION INVARIANTS ---
@@ -75,19 +79,19 @@ def calculate_difference(
     """
     Isolated deterministic arithmetic calculation tool.
     LLMs are prohibited from doing mental math; they must call this tool.
-    
+
+    All fee/tax arguments MUST be supplied as percentage values (e.g., 2.0 for 2%).
+    No silent normalization is performed — callers are responsible for correct units.
+
     Formula:
       fee = billed_amount * (fee_pct / 100)
       gst = fee * (gst_on_fee_pct / 100)
       expected_settlement = billed - fee - gst - flat_surcharge - refund + fx_adjustment
       residual_gap = settled_amount - expected_settlement
     """
-    # Defensive normalization against common LLM decimal confusion
-    if 0.0 < fee_pct < 0.1:
-        fee_pct = fee_pct * 100.0
-    if 0.0 < gst_on_fee_pct < 0.5:
-        gst_on_fee_pct = gst_on_fee_pct * 100.0
-
+    # FIX H6: Removed silent normalization (was multiplying sub-0.1% fees by 100x,
+    # which would corrupt legitimate low-MDR tiers like UPI 0.09%). Inputs must
+    # be supplied as explicit percentage values by the caller.
     fee = billed_amount * (fee_pct / 100.0)
     gst_on_fee = fee * (gst_on_fee_pct / 100.0)
     expected_settlement = (
@@ -240,32 +244,136 @@ def evaluate_hypotheses_deterministically(
 
 
 # --- 4. ASYNC REASONING BACKGROUND PIPELINE FOR DISCREPANCIES --- 
+
+import urllib.request
+import urllib.error
+
+async def call_groq_llm(
+    billed_amount: float,
+    settled_amount: float,
+    is_international: bool,
+    refund_amount: float
+) -> Optional[Dict[str, Any]]:
+    """
+    Attempts calling Groq LLM API with structured reasoning when GROQ_API_KEY is configured.
+    Enforces deterministic tool calculation for arithmetic verification.
+    """
+    if not GROQ_API_KEY:
+        return None
+
+    prompt = f"""You are a financial discrepancy reasoning engine for Razorpay settlements.
+Billed Amount: {billed_amount}
+Settled Amount: {settled_amount}
+Is International: {is_international}
+Refund Amount: {refund_amount}
+
+Test standard fee schedules:
+- Domestic MDR 2% (+ optional 18% GST on fee)
+- International MDR 3% (+ optional 18% GST on fee)
+- Flat Gateway Surcharges (₹10, ₹15)
+- Partial Refund deductions
+- FX Rounding (<= ₹0.50)
+
+Respond strictly with valid JSON only in this schema:
+{{
+  "hypothesis_text": "description",
+  "suggested_category": "MDR_VARIANCE|PARTIAL_REFUND|FX_ROUNDING|UNRESOLVED",
+  "fee_pct": 2.0,
+  "gst_on_fee_pct": 18.0,
+  "flat_surcharge": 0.0,
+  "refund_amount": 0.0,
+  "fx_adjustment": 0.0
+}}"""
+
+    payload = {
+        "model": LLM_MODEL,
+        "messages": [
+            {"role": "system", "content": "You are a financial settlement reconciler. Output strictly valid JSON."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.1,
+        "response_format": {"type": "json_object"}
+    }
+
+    try:
+        req = urllib.request.Request(
+            "https://api.groq.com/openai/v1/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            method="POST"
+        )
+        loop = asyncio.get_event_loop()
+        def _execute_req():
+            with urllib.request.urlopen(req, timeout=LLM_TIMEOUT_SECONDS) as response:
+                return response.read()
+
+        res_bytes = await loop.run_in_executor(None, _execute_req)
+        res_json = json.loads(res_bytes.decode("utf-8"))
+        content = res_json["choices"][0]["message"]["content"]
+        parsed = json.loads(content)
+
+        # Run math through isolated deterministic tool
+        calc = calculate_difference(
+            billed_amount=billed_amount,
+            settled_amount=settled_amount,
+            fee_pct=float(parsed.get("fee_pct", 0.0)),
+            gst_on_fee_pct=float(parsed.get("gst_on_fee_pct", 0.0)),
+            flat_surcharge=float(parsed.get("flat_surcharge", 0.0)),
+            refund_amount=float(parsed.get("refund_amount", 0.0)),
+            fx_adjustment=float(parsed.get("fx_adjustment", 0.0))
+        )
+        return {
+            "hypothesis_text": parsed.get("hypothesis_text", "LLM reasoning hypothesis."),
+            "calculation_breakdown": calc,
+            "suggested_category": parsed.get("suggested_category", "UNRESOLVED"),
+            "confidence_score": 0.0,
+            "requires_human_review": True
+        }
+    except Exception as e:
+        logger.warning(f"Groq LLM call skipped/failed: {e}")
+        return None
+
+
 async def process_single_exception(
     result_id: uuid.UUID,
     settlement_data: Dict[str, Any],
     candidate_order: Optional[Dict[str, Any]],
     db: Session
-) -> Dict[str, Any]:
+) -> Tuple[Dict[str, Any], str]:
     """
-    Builds context, invokes hypothesis testing, applies server-side validate_card override,
-    and returns the final reasoning card dictionary.    
+    Builds context, invokes LLM/rule hypothesis testing, applies server-side validate_card override,
+    and returns (validated_card, actor).
     """
     billed_amount = candidate_order.get("billed_amount") if candidate_order else settlement_data["settled_amount"]
     settled_amount = settlement_data["settled_amount"]
     is_intl = candidate_order.get("is_international", False) if candidate_order else False
     refund_amount = candidate_order.get("refund_amount", 0.0) if candidate_order else 0.0
 
-    # If OpenAI API key is present, attempt LLM call; fallback seamlessly to deterministic tool tester
-    raw_card = evaluate_hypotheses_deterministically(
-        billed_amount=billed_amount,
-        settled_amount=settled_amount,
-        is_international=is_intl,
-        known_refund=refund_amount
-    )
+    raw_card = None
+    actor = "rule_reasoner"
+
+    # Attempt LLM call if API key configured
+    if GROQ_API_KEY:
+        raw_card = await call_groq_llm(billed_amount, settled_amount, is_intl, refund_amount)
+        if raw_card:
+            actor = "llm"
+
+    # Fallback seamlessly to deterministic rule engine
+    if not raw_card:
+        raw_card = evaluate_hypotheses_deterministically(
+            billed_amount=billed_amount,
+            settled_amount=settled_amount,
+            is_international=is_intl,
+            known_refund=refund_amount
+        )
+        actor = "rule_reasoner"
 
     # Server-side validation override
     validated_card = validate_card(raw_card)
-    return validated_card
+    return validated_card, actor
 
 
 async def run_batch_reasoning_pipeline(batch_id: uuid.UUID, db_session_factory) -> None:
@@ -273,7 +381,7 @@ async def run_batch_reasoning_pipeline(batch_id: uuid.UUID, db_session_factory) 
     Asynchronous background worker for processing all unresolved exceptions in a batch.
     Generates ReasoningCard rows, updates batch stats, and emits audit events.
     """
-    start_time = datetime.utcnow()
+    start_time = datetime.now(timezone.utc).replace(tzinfo=None)
     db: Session = db_session_factory()
     try:
         batch = db.query(Batch).filter(Batch.id == batch_id).first()
@@ -307,7 +415,7 @@ async def run_batch_reasoning_pipeline(batch_id: uuid.UUID, db_session_factory) 
             } if ledger_rec else None
 
             # Process reasoning with isolated math
-            card_dict = await process_single_exception(
+            card_dict, actor = await process_single_exception(
                 result_id=exc.id,
                 settlement_data=settle_dict,
                 candidate_order=ledger_dict,
@@ -337,7 +445,7 @@ async def run_batch_reasoning_pipeline(batch_id: uuid.UUID, db_session_factory) 
             # Update ReconciliationResult status based on validated confidence
             if card_dict["suggested_category"] != "UNRESOLVED" and card_dict["confidence_score"] >= 0.70:
                 exc.status = ReconciliationStatus.matched_ai_resolved
-                exc.resolution_source = "llm_reasoner"
+                exc.resolution_source = ResolutionSource.llm_reasoner if actor == "llm" else ResolutionSource.rule_engine
                 exc.confidence_score = card_dict["confidence_score"]
                 ai_resolved_count += 1
             else:
@@ -345,12 +453,12 @@ async def run_batch_reasoning_pipeline(batch_id: uuid.UUID, db_session_factory) 
                 exc.confidence_score = card_dict["confidence_score"]
                 unresolved_count += 1
 
-            # Log LLM call to immutable audit log
+            # FIX A11: Truthful audit actor
             log_audit_event(
                 db=db,
                 batch_id=batch_id,
                 event_type=AuditEventType.llm_call,
-                actor="llm",
+                actor=actor,
                 payload={
                     "reconciliation_result_id": str(exc.id),
                     "suggested_category": card_dict["suggested_category"],
@@ -368,17 +476,20 @@ async def run_batch_reasoning_pipeline(batch_id: uuid.UUID, db_session_factory) 
         batch.match_rate_ai_resolved = match_rate_ai
         batch.unresolved_count = unresolved_count
 
-        elapsed_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
-        setattr(batch, "throughput_ms", elapsed_ms)
+        elapsed_ms = int((datetime.now(timezone.utc).replace(tzinfo=None) - start_time).total_seconds() * 1000)
+        batch.duration_ms = elapsed_ms  # FIX H4: use the actual DB column, not setattr
 
         db.commit()
 
     except Exception as e:
         db.rollback()
-        batch = db.query(Batch).filter(Batch.id == batch_id).first()
-        if batch:
-            batch.status = BatchStatus.failed
-            db.commit()
-        print(f"Error in reasoning background pipeline: {e}")
+        logger.exception(f"[reasoning_pipeline] Fatal error for batch {batch_id}: {e}")
+        try:
+            batch = db.query(Batch).filter(Batch.id == batch_id).first()
+            if batch:
+                batch.status = BatchStatus.failed
+                db.commit()
+        except Exception as inner:
+            logger.exception(f"[reasoning_pipeline] Failed to mark batch {batch_id} as failed: {inner}")
     finally:
         db.close()

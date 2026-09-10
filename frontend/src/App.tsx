@@ -79,11 +79,22 @@ export const App: React.FC = () => {
     }
   };
 
-  // 3. Polling loop during AI reasoning
+  // 3. Polling loop during AI reasoning with timeout guard (FIX A12)
   useEffect(() => {
     if (!activeBatchId || !isReasoning) return;
 
+    let pollCount = 0;
+    const MAX_POLLS = 150; // 5 minutes max at 2s intervals
+
     const pollInterval = setInterval(async () => {
+      pollCount += 1;
+      if (pollCount > MAX_POLLS) {
+        setIsReasoning(false);
+        showToast('Reasoning operation timed out after 5 minutes. Check backend logs.');
+        clearInterval(pollInterval);
+        return;
+      }
+
       try {
         const sum = await getBatchSummary(activeBatchId);
         setSummary(sum);

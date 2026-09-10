@@ -61,10 +61,12 @@ def run_deterministic_matching(db: Session, batch_id: uuid.UUID) -> Dict[str, An
     settlement_records = db.query(SettlementRecord).filter(SettlementRecord.batch_id == batch_id).all()
     ledger_records = db.query(OrderLedger).filter(OrderLedger.batch_id == batch_id).all()
 
-    # Pre-index ledger records by order_id for fast O(1) lookups
+    # Pre-index ledger records by order_id and rounded billed_amount for O(1) lookups
     ledger_by_order_id: Dict[str, List[OrderLedger]] = {}
+    ledger_by_amount: Dict[float, List[OrderLedger]] = {}
     for l in ledger_records:
         ledger_by_order_id.setdefault(l.order_id, []).append(l)
+        ledger_by_amount.setdefault(round(float(l.billed_amount), 2), []).append(l)
 
     # Define the time tolerance window for fallback matching
     tolerance_window = timedelta(seconds=batch.timestamp_tolerance_seconds)
@@ -99,15 +101,13 @@ def run_deterministic_matching(db: Session, batch_id: uuid.UUID) -> Dict[str, An
             came_from_order_id = True
 
         # ---- Path B: Fallback on fee-adjusted amount + timestamp window----
-        # (Only attempted if order_id was absent / unmatched and fee is known)
+        # FIX A14: O(1) amount bucket lookup instead of full O(N*M) table scan
         elif fee_deducted is not None:
-            for l in ledger_records:
-                expected_settled = float(l.billed_amount) - fee_deducted
-                amount_diff = abs(expected_settled - settled_amount)
+            expected_gross = round(settled_amount + fee_deducted, 2)
+            potential_candidates = ledger_by_amount.get(expected_gross, [])
+            for l in potential_candidates:
                 time_diff = abs(l.order_timestamp - s.settlement_timestamp)
-                
-                # If amt aligns within 1 paise (0.01) and order happened within time tolerance
-                if amount_diff < 0.01 and time_diff <= tolerance_window:
+                if time_diff <= tolerance_window:
                     candidates.append(l)
             if candidates:
                 came_from_fallback = True

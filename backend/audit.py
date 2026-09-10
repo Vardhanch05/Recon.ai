@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Union
 from sqlalchemy.orm import Session
 import uuid
@@ -30,7 +30,7 @@ def log_audit_event(
         event_type=event_type,
         actor=actor,
         payload_json=payload_json_str,
-        timestamp=datetime.utcnow()
+        timestamp=datetime.now(timezone.utc).replace(tzinfo=None)  # Store as naive UTC
     )
 
     db.add(audit_entry)

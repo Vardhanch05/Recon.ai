@@ -9,6 +9,7 @@ __pycache__/
 *$py.class
 *.db
 *.sqlite
+recon_ai.db
 *.sqlite3
 *.so
 .Python
