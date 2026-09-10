@@ -1,7 +1,7 @@
 import json
 import uuid
 import os
-import asyncio
+import asyncio # for asynchronous background task completion
 from typing import Dict, Any, Tuple, List, Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
@@ -21,14 +21,18 @@ from backend.audit import log_audit_event
 from backend.config import GROQ_API_KEY, LLM_MODEL, LLM_TIMEOUT_SECONDS
 
 
-# ─────────────────────────────────────────────
-# 1. CORE CONFIDENCE & VALIDATION INVARIANTS
-# ─────────────────────────────────────────────
+# --- 1. CORE CONFIDENCE & VALIDATION INVARIANTS ---
 
 def compute_confidence(residual_gap: float) -> Tuple[float, str]:
     """
-    Single source of truth for confidence scores derived from mathematical residual gap.
-    Never LLM self-reported.
+    Mathematical single source of truth for confidence scores.
+    NEVER relies on self-reported LLM confidence to prevent hallucinated scores.
+    
+    Formula:
+      • gap <= 0.05 (<= 5 paise):  Score 0.95 to 0.99 -> 'resolved'
+      • gap <= 0.50 (<= 50 paise): Score 0.70 to 0.94 -> 'resolved' (minor FX/rounding)
+      • gap <= 5.00:              Score 0.30 to 0.69 -> 'low_confidence'
+      • gap > 5.00:               Score 0.00         -> 'unresolved'
     """
     gap = abs(residual_gap)
     if gap <= 0.05:
@@ -49,6 +53,7 @@ def validate_card(card: Dict[str, Any]) -> Dict[str, Any]:
     gap = abs(card["calculation_breakdown"].get("residual_gap", 999.0))
     computed_confidence, computed_status = compute_confidence(gap)
     
+    # Overwrite card confidence with server-computed value
     card["confidence_score"] = computed_confidence
     if computed_status != "resolved" and card.get("suggested_category") != "UNRESOLVED":
         card["suggested_category"] = "UNRESOLVED"
@@ -56,9 +61,7 @@ def validate_card(card: Dict[str, Any]) -> Dict[str, Any]:
     return card
 
 
-# ─────────────────────────────────────────────
-# 2. DETERMINISTIC MATH TOOL
-# ─────────────────────────────────────────────
+# --- 2. DETERMINISTIC MATH TOOL (Zero Hallucination Arithmetic) ---
 
 def calculate_difference(
     billed_amount: float,
@@ -70,8 +73,14 @@ def calculate_difference(
     fx_adjustment: float = 0.0
 ) -> Dict[str, Any]:
     """
-    Isolated deterministic arithmetic calculation tool for the LLM.
-    Normalizes decimal/percentage confusions (e.g. 0.03 -> 3.0).
+    Isolated deterministic arithmetic calculation tool.
+    LLMs are prohibited from doing mental math; they must call this tool.
+    
+    Formula:
+      fee = billed_amount * (fee_pct / 100)
+      gst = fee * (gst_on_fee_pct / 100)
+      expected_settlement = billed - fee - gst - flat_surcharge - refund + fx_adjustment
+      residual_gap = settled_amount - expected_settlement
     """
     # Defensive normalization against common LLM decimal confusion
     if 0.0 < fee_pct < 0.1:
@@ -100,9 +109,7 @@ def calculate_difference(
     }
 
 
-# ─────────────────────────────────────────────
-# 3. RULE HYPOTHESIS TESTER (FOR REASONING ENGINE)
-# ─────────────────────────────────────────────
+# --- 3. RULE HYPOTHESIS TESTER (FOR REASONING ENGINE) ---
 
 KNOWN_FEE_SCHEDULE = {
     "domestic_mdr_pct": 2.0,
@@ -118,8 +125,15 @@ def evaluate_hypotheses_deterministically(
     known_refund: Optional[float] = None
 ) -> Dict[str, Any]:
     """
-    Evaluates discrepancy hypotheses through calculate_difference tool.
-    Used for reliable hypothesis selection and fallback execution.
+    Evaluates known discrepancy hypotheses through calculate_difference.
+    Tests:
+      1. Domestic 2% MDR (+ optional 18% GST)
+      2. International 3% MDR (+ optional 18% GST)
+      3. Partial Refund deduction
+      4. Flat Gateway Surcharges (₹10, ₹15)
+      5. Combined causes (MDR + GST + Refund)
+      6. FX Rounding (<= ₹0.50)
+      7. UNRESOLVED (if residual gap remains)
     """
     attempts = []
     
@@ -209,7 +223,7 @@ def evaluate_hypotheses_deterministically(
                     "requires_human_review": False
                 }
 
-    # 7. Unresolved
+    # 7. Unresolved anomaly
     raw_gap = round(billed_amount - settled_amount, 2)
     return {
         "hypothesis_text": f"No combination of known fee, tax, surcharge, or refund schedules explains a ₹{raw_gap:.2f} gap. Flagged for manual investigation.",
@@ -225,10 +239,7 @@ def evaluate_hypotheses_deterministically(
     }
 
 
-# ─────────────────────────────────────────────
-# 4. LLM REASONING RUNNER
-# ─────────────────────────────────────────────
-
+# --- 4. ASYNC REASONING BACKGROUND PIPELINE FOR DISCREPANCIES --- 
 async def process_single_exception(
     result_id: uuid.UUID,
     settlement_data: Dict[str, Any],
@@ -236,7 +247,8 @@ async def process_single_exception(
     db: Session
 ) -> Dict[str, Any]:
     """
-    Builds context, invokes reasoning with calculate_difference, validates, and returns reasoning card dict.
+    Builds context, invokes hypothesis testing, applies server-side validate_card override,
+    and returns the final reasoning card dictionary.    
     """
     billed_amount = candidate_order.get("billed_amount") if candidate_order else settlement_data["settled_amount"]
     settled_amount = settlement_data["settled_amount"]
@@ -258,7 +270,8 @@ async def process_single_exception(
 
 async def run_batch_reasoning_pipeline(batch_id: uuid.UUID, db_session_factory) -> None:
     """
-    Asynchronous background job for processing all exceptions in a batch.
+    Asynchronous background worker for processing all unresolved exceptions in a batch.
+    Generates ReasoningCard rows, updates batch stats, and emits audit events.
     """
     start_time = datetime.utcnow()
     db: Session = db_session_factory()
@@ -293,7 +306,7 @@ async def run_batch_reasoning_pipeline(batch_id: uuid.UUID, db_session_factory) 
                 "payment_method": ledger_rec.payment_method if ledger_rec else "card"
             } if ledger_rec else None
 
-            # Process reasoning
+            # Process reasoning with isolated math
             card_dict = await process_single_exception(
                 result_id=exc.id,
                 settlement_data=settle_dict,
@@ -301,7 +314,7 @@ async def run_batch_reasoning_pipeline(batch_id: uuid.UUID, db_session_factory) 
                 db=db
             )
 
-            # Insert or update ReasoningCard
+            # Insert or update ReasoningCard in DB
             existing_card = db.query(ReasoningCard).filter(ReasoningCard.reconciliation_result_id == exc.id).first()
             if existing_card:
                 existing_card.hypothesis_text = card_dict["hypothesis_text"]
@@ -321,7 +334,7 @@ async def run_batch_reasoning_pipeline(batch_id: uuid.UUID, db_session_factory) 
                 )
                 db.add(new_card)
 
-            # Update ReconciliationResult status and confidence
+            # Update ReconciliationResult status based on validated confidence
             if card_dict["suggested_category"] != "UNRESOLVED" and card_dict["confidence_score"] >= 0.70:
                 exc.status = ReconciliationStatus.matched_ai_resolved
                 exc.resolution_source = "llm_reasoner"
