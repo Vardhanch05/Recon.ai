@@ -1,38 +1,63 @@
 from datetime import datetime, timedelta
 from typing import Tuple, Dict, Any, List
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func # SQLAlchemy SQL function helpers (e.g. func.abs for mathematical differences)
 import uuid
 
-from backend.models import (
-    Batch,
-    BatchStatus,
-    SettlementRecord,
-    OrderLedger,
-    ReconciliationResult,
-    ReconciliationStatus,
-    RoutingReason,
-    ResolutionSource,
-    ExceptionCandidate,
-    AuditEventType
-)
-from backend.audit import log_audit_event
+try:
+    from backend.models import (
+        Batch,
+        BatchStatus,
+        SettlementRecord,
+        OrderLedger,
+        ReconciliationResult,
+        ReconciliationStatus,
+        RoutingReason,
+        ResolutionSource,
+        ExceptionCandidate,
+        AuditEventType
+    )
+    from backend.audit import log_audit_event
+except ImportError:
+    from models import (
+        Batch,
+        BatchStatus,
+        SettlementRecord,
+        OrderLedger,
+        ReconciliationResult,
+        ReconciliationStatus,
+        RoutingReason,
+        ResolutionSource,
+        ExceptionCandidate,
+        AuditEventType
+    )
+    from audit import log_audit_event
 
 
+# --- Deterministic Matching Engine (Rule-Based Pass ~80% Match Target) ---
 def run_deterministic_matching(db: Session, batch_id: uuid.UUID) -> Dict[str, Any]:
     """
     Executes Step 1 Deterministic Matching Engine on a batch:
-    - Primary pass: order_id match (unconditional trust, sanity check if fee_deducted present)
-    - Fallback pass: fee-adjusted amount + timestamp (only if fee_deducted IS NOT NULL)
-    - Exceptions: tags routing_reason (amount_mismatch, ambiguous_multiple, currency_mismatch, no_match)
-    - Stores ambiguous multiple candidates in exception_candidates table
-    - Updates batch status and match_rate_deterministic
-    - Logs match audit events
+    1. Primary Pass: order_id match (O(1) hash map lookup).
+       - If fee_deducted is present: runs a fee sanity check.
+       - If sanity check fails -> routes to 'amount_mismatch' exception for LLM reasoner.
+    2. Fallback Pass: fee-adjusted amount + timestamp window.
+       - Activated when order_id is missing/unmatched and fee_deducted IS NOT NULL.
+    3. Exception Routing:
+       - Tags exceptions with routing_reason ('amount_mismatch', 'ambiguous_multiple', 'currency_mismatch', 'no_match').
+       - If multiple orders match the fallback, persists them in exception_candidates table.
+    4. Idempotency & Batch Metrics:
+       - Clears previous results if re-running.
+       - Updates batch status and match_rate_deterministic percentage.
+       - Writes an immutable 'match' event to audit_log.
     """
+
+    # 1. Fetch the target batch
     batch = db.query(Batch).filter(Batch.id == batch_id).first()
     if not batch:
         raise ValueError("Batch not found")
 
+    # 2. Load all the settlement and ledger entries for this batch
     settlement_records = db.query(SettlementRecord).filter(SettlementRecord.batch_id == batch_id).all()
     ledger_records = db.query(OrderLedger).filter(OrderLedger.batch_id == batch_id).all()
 
@@ -41,15 +66,17 @@ def run_deterministic_matching(db: Session, batch_id: uuid.UUID) -> Dict[str, An
     for l in ledger_records:
         ledger_by_order_id.setdefault(l.order_id, []).append(l)
 
+    # Define the time tolerance window for fallback matching
     tolerance_window = timedelta(seconds=batch.timestamp_tolerance_seconds)
 
     matched_count = 0
     exception_count = 0
 
-    # Clear previous results if re-running (idempotent reset for matching)
+    # Idempotency: Clear previous results if this batch is being re-run
     db.query(ReconciliationResult).filter(ReconciliationResult.batch_id == batch_id).delete()
     db.flush()
 
+# --- Transaction Matching Loop ---
     for s in settlement_records:
         settled_amount = float(s.settled_amount)
         fee_deducted = float(s.fee_deducted) if s.fee_deducted is not None else None
@@ -58,33 +85,35 @@ def run_deterministic_matching(db: Session, batch_id: uuid.UUID) -> Dict[str, An
         came_from_order_id = False
         came_from_fallback = False
 
-        # ── STEP 1: Primary Match on Order_ID ─────────────────────────────
+        # ---- Path A: Primary Match on Order_ID (Direct Reference Match) ----
         if s.order_id and s.order_id in ledger_by_order_id:
             candidates = ledger_by_order_id[s.order_id]
             came_from_order_id = True
 
-        # ── STEP 2: Fallback on fee-adjusted amount + timestamp ───────────
+        # ---- Path B: Fallback on fee-adjusted amount + timestamp window----
+        # (Only attempted if order_id was absent / unmatched and fee is known)
         elif fee_deducted is not None:
             for l in ledger_records:
                 expected_settled = float(l.billed_amount) - fee_deducted
                 amount_diff = abs(expected_settled - settled_amount)
                 time_diff = abs(l.order_timestamp - s.settlement_timestamp)
                 
+                # If amt aligns within 1 paise (0.01) and order happened within time tolerance
                 if amount_diff < 0.01 and time_diff <= tolerance_window:
                     candidates.append(l)
             if candidates:
                 came_from_fallback = True
 
-        # ── STEP 3: Evaluation & Routing ──────────────────────────────────
+        # ---- Path C: Evaluation & State Routing ----
         if len(candidates) == 1 and came_from_order_id:
             candidate = candidates[0]
             billed_amount = float(candidate.billed_amount)
 
-            # Optional fee sanity check if fee_deducted is present
+            # Sanity Check: If fee was deducted, does gross - fee = net?
             if fee_deducted is not None:
                 sanity_gap = abs(billed_amount - fee_deducted - settled_amount)
                 if sanity_gap >= 0.01:
-                    # Amount mismatch exception, but keep candidate order for LLM context
+                    # Sanity gap failed -> Flag as exception, but link candidate order so AI can investigate
                     res = ReconciliationResult(
                         id=uuid.uuid4(),
                         batch_id=batch.id,
@@ -99,7 +128,7 @@ def run_deterministic_matching(db: Session, batch_id: uuid.UUID) -> Dict[str, An
                     exception_count += 1
                     continue
 
-            # Deterministic Match
+            # Deterministic Match Passed
             discrepancy = round(billed_amount - settled_amount, 2)
             res = ReconciliationResult(
                 id=uuid.uuid4(),
@@ -133,7 +162,7 @@ def run_deterministic_matching(db: Session, batch_id: uuid.UUID) -> Dict[str, An
             matched_count += 1
 
         else:
-            # Exception Case
+            # ---- Path D: Ambigious or Unmatched Exceptions ----
             exception_count += 1
             reason = RoutingReason.no_match
             if len(candidates) > 1:
@@ -154,7 +183,8 @@ def run_deterministic_matching(db: Session, batch_id: uuid.UUID) -> Dict[str, An
             db.add(res)
             db.flush()
 
-            # Store multiple candidates in exception_candidates table
+            # If multiple orders matched the fallback criteria, persist all candidates
+            # into exception_candidates table so the AI Reasoner can choose between them
             if len(candidates) > 1:
                 for cand in candidates:
                     db.add(ExceptionCandidate(
@@ -163,7 +193,7 @@ def run_deterministic_matching(db: Session, batch_id: uuid.UUID) -> Dict[str, An
                         order_ledger_id=cand.id
                     ))
 
-    # Update Batch stats
+    # --- 4. Update Batch Metrics & Emit Audit Event --- 
     total_records = len(settlement_records)
     match_rate = round((matched_count / total_records * 100.0), 2) if total_records > 0 else 0.0
     
@@ -171,7 +201,7 @@ def run_deterministic_matching(db: Session, batch_id: uuid.UUID) -> Dict[str, An
     batch.match_rate_deterministic = match_rate
     batch.unresolved_count = exception_count
     
-    # Audit log entry for deterministic match pass
+    # Record the deterministic match pass in the immutable audit log
     log_audit_event(
         db=db,
         batch_id=batch.id,
@@ -194,3 +224,4 @@ def run_deterministic_matching(db: Session, batch_id: uuid.UUID) -> Dict[str, An
         "exception_count": exception_count,
         "match_rate_deterministic_pct": match_rate
     }
+    
