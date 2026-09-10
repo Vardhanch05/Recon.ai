@@ -1,9 +1,9 @@
 import uuid
 import enum
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import (
     Column, String, Float, Integer, Boolean, DateTime, ForeignKey, Enum as SQLEnum,
-    Text, Index, UniqueConstraint, types
+    Text, Index, UniqueConstraint, Numeric, types
 )
 from sqlalchemy.orm import relationship
 
@@ -12,7 +12,11 @@ try:
 except ImportError:
     from database import Base
 
-# Cross-database UUID type supporting both PostgreSQL and SQLite
+def get_utc_now() -> datetime:
+    """Returns current naive UTC timestamp."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+# Cross-database GUID type supporting both PostgreSQL and SQLite
 class GUID(types.TypeDecorator):
     """Platform-independent GUID type.
     Uses PostgreSQL's UUID type, otherwise uses CHAR(36), storing as stringifier.
@@ -101,14 +105,14 @@ class Batch(Base):
     __tablename__ = "batches"
 
     id = Column(GUID, primary_key=True, default=uuid.uuid4)
-    uploaded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    uploaded_at = Column(DateTime, default=get_utc_now, nullable=False)
     status = Column(SQLEnum(BatchStatus), default=BatchStatus.uploaded, nullable=False)
     total_records = Column(Integer, default=0)
     ingestion_error_count = Column(Integer, default=0)
     matched_deterministic_count = Column(Integer, default=0)
     matched_ai_resolved_count = Column(Integer, default=0)
-    match_rate_deterministic = Column(Float, nullable=True)
-    match_rate_ai_resolved = Column(Float, nullable=True)
+    match_rate_deterministic = Column(Numeric(5, 2), nullable=True)
+    match_rate_ai_resolved = Column(Numeric(5, 2), nullable=True)
     unresolved_count = Column(Integer, default=0)
     timestamp_tolerance_seconds = Column(Integer, default=2)
     duration_ms = Column(Integer, default=0)
@@ -127,9 +131,9 @@ class SettlementRecord(Base):
     batch_id = Column(GUID, ForeignKey("batches.id", ondelete="CASCADE"), nullable=False)
     gateway_txn_id = Column(String, nullable=False)
     order_id = Column(String, nullable=True, index=True)
-    settled_amount = Column(Float, nullable=False)
+    settled_amount = Column(Numeric(18, 4), nullable=False)
     settlement_timestamp = Column(DateTime, nullable=False)
-    fee_deducted = Column(Float, nullable=True)
+    fee_deducted = Column(Numeric(18, 4), nullable=True)
     currency = Column(String(3), default="INR")
     raw_row_json = Column(Text, nullable=True)
 
@@ -146,9 +150,9 @@ class OrderLedger(Base):
     id = Column(GUID, primary_key=True, default=uuid.uuid4)
     batch_id = Column(GUID, ForeignKey("batches.id", ondelete="CASCADE"), nullable=False)
     order_id = Column(String, nullable=False, index=True)
-    billed_amount = Column(Float, nullable=False)
+    billed_amount = Column(Numeric(18, 4), nullable=False)
     order_timestamp = Column(DateTime, nullable=False)
-    refund_amount = Column(Float, default=0.0, nullable=True)
+    refund_amount = Column(Numeric(18, 4), default=0.0, nullable=True)
     is_international = Column(Boolean, default=False)
     payment_method = Column(String, default="card")
     raw_row_json = Column(Text, nullable=True)
@@ -166,12 +170,12 @@ class ReconciliationResult(Base):
     
     status = Column(SQLEnum(ReconciliationStatus), nullable=False)
     routing_reason = Column(SQLEnum(RoutingReason), nullable=True)
-    discrepancy_amount = Column(Float, nullable=True)
+    discrepancy_amount = Column(Numeric(18, 4), nullable=True)
     resolution_source = Column(SQLEnum(ResolutionSource), default=ResolutionSource.rule_engine, nullable=False)
-    confidence_score = Column(Float, nullable=True)
+    confidence_score = Column(Numeric(5, 4), nullable=True)
     reviewed_at = Column(DateTime, nullable=True)
     reviewed_by = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=get_utc_now)
 
     batch = relationship("Batch", back_populates="results")
     settlement_record = relationship("SettlementRecord")
@@ -203,11 +207,11 @@ class ReasoningCard(Base):
     
     hypothesis_text = Column(Text, nullable=False)
     calculation_breakdown = Column(Text, nullable=False)  # JSON string
-    confidence_score = Column(Float, nullable=False)
+    confidence_score = Column(Numeric(5, 4), nullable=False)
     suggested_category = Column(String, nullable=False)
     requires_human_review = Column(Boolean, default=True)
     human_override_note = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=get_utc_now)
 
     reconciliation_result = relationship("ReconciliationResult", back_populates="reasoning_card")
 
@@ -220,10 +224,11 @@ class AuditLog(Base):
     event_type = Column(SQLEnum(AuditEventType), nullable=False)
     actor = Column(String, default="system", nullable=False)
     payload_json = Column(Text, nullable=True)  # JSON string
-    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
+    timestamp = Column(DateTime, default=get_utc_now, nullable=False)
 
     batch = relationship("Batch", back_populates="audit_logs")
 
     __table_args__ = (
         Index("idx_audit_batch_time", "batch_id", "timestamp"),
     )
+

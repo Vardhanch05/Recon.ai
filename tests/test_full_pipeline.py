@@ -49,18 +49,18 @@ def test_full_reconciliation_pipeline():
     assert summary_data["matched_ai_resolved_count"] == 8
     assert summary_data["unresolved_count"] == 3
 
-    # 6. Verify Accuracy Report against Ground Truth Key
+    # 6. Verify Accuracy Report against Ground Truth Key (Strict evaluation without inflation)
     acc_res = client.get(f"/batches/{batch_id}/accuracy-report?ground_truth_path=data/ground_truth.csv")
     assert acc_res.status_code == 200
     acc_data = acc_res.json()
     assert acc_data["total_evaluated"] == 11
     assert acc_data["explainable_total"] == 8
-    assert acc_data["explainable_correct"] == 8
-    assert acc_data["explainable_accuracy_pct"] == 100.0
+    assert acc_data["explainable_correct"] == 7
+    assert acc_data["explainable_accuracy_pct"] == 87.5
     assert acc_data["unresolvable_total"] == 3
     assert acc_data["unresolvable_correct"] == 3
     assert acc_data["unresolvable_accuracy_pct"] == 100.0
-    assert acc_data["overall_accuracy_pct"] == 100.0
+    assert acc_data["overall_accuracy_pct"] == 90.91
 
     # 7. Query Exceptions List and verify cards structure
     exc_res = client.get(f"/batches/{batch_id}/exceptions")

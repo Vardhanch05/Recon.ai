@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 import pytest
 from sqlalchemy.exc import IntegrityError
 from backend.models import (
@@ -29,13 +29,15 @@ def test_models_and_constraints(db_session):
     assert batch.id is not None
     assert batch.status == BatchStatus.uploaded
 
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+
     # 2. Create a SettlementRecord
     settle_rec = SettlementRecord(
         batch_id=batch.id,
         gateway_txn_id="pay_12345",
         order_id="order_999",
         settled_amount=950.00,
-        settlement_timestamp=datetime.utcnow(),
+        settlement_timestamp=now_utc,
         fee_deducted=50.00,
         currency="INR",
         raw_row_json='{"gateway_txn_id": "pay_12345", "amount": 950.00}'
@@ -49,7 +51,7 @@ def test_models_and_constraints(db_session):
         batch_id=batch.id,
         order_id="order_999",
         billed_amount=1000.00,
-        order_timestamp=datetime.utcnow(),
+        order_timestamp=now_utc,
         refund_amount=0.00,
         is_international=False,
         payment_method="card",
