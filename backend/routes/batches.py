@@ -1,4 +1,5 @@
-from datetime import datetime
+import json
+from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -10,8 +11,11 @@ from backend.models import Batch, BatchStatus, SettlementRecord, OrderLedger, Re
 from backend.schemas import UploadResponse, BatchSummaryResponse, AuditLogResponse, AuditLogItemOut
 from backend.ingestion import parse_settlement_csv, parse_ledger_csv
 from backend.audit import log_audit_event
+from backend.security import verify_api_key
 
 router = APIRouter(prefix="/batches", tags=["Batches"])
+
+MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB limit
 
 @router.post("/upload", response_model=UploadResponse, status_code=status.HTTP_200_OK)
 async def upload_batch(
@@ -19,6 +23,7 @@ async def upload_batch(
     ledger_file: UploadFile = File(..., description="Merchant Internal Order Ledger CSV file"),
     timestamp_tolerance_seconds: int = Form(2, description="Tolerance in seconds for fallback matching"),
     confirm_overwrite: bool = Form(False, description="Overwrite if batch with identical filename exists"),
+    api_key: Optional[str] = Depends(verify_api_key),
     db: Session = Depends(get_db)
 ):
     """
@@ -27,6 +32,12 @@ async def upload_batch(
     """
     settlement_bytes = await settlement_file.read()
     ledger_bytes = await ledger_file.read()
+
+    if len(settlement_bytes) > MAX_UPLOAD_SIZE_BYTES or len(ledger_bytes) > MAX_UPLOAD_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Uploaded file exceeds maximum allowed limit of {MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)}MB."
+        )
 
     # Parse CSVs
     valid_settlements, settlement_errors = parse_settlement_csv(settlement_bytes)
@@ -43,7 +54,7 @@ async def upload_batch(
     # Create Batch record
     batch = Batch(
         id=uuid.uuid4(),
-        uploaded_at=datetime.utcnow(),
+        uploaded_at=datetime.now(timezone.utc).replace(tzinfo=None),
         status=BatchStatus.uploaded,
         total_records=len(valid_settlements),
         ingestion_error_count=total_ingestion_errors,
@@ -151,8 +162,10 @@ def get_batch_summary(batch_id: uuid.UUID, db: Session = Depends(get_db)):
         unresolved_count=unresolved,
         ingestion_error_count=batch.ingestion_error_count,
         match_rate_deterministic_pct=float(batch.match_rate_deterministic) if batch.match_rate_deterministic is not None else None,
-        match_rate_ai_resolved_pct=float(batch.match_rate_ai_resolved_pct) if hasattr(batch, 'match_rate_ai_resolved_pct') and batch.match_rate_ai_resolved is not None else (float(batch.match_rate_ai_resolved) if batch.match_rate_ai_resolved is not None else None),
-        throughput_ms=getattr(batch, "throughput_ms", None)
+        # FIX H4: use the correct column name (match_rate_ai_resolved, not match_rate_ai_resolved_pct)
+        match_rate_ai_resolved_pct=float(batch.match_rate_ai_resolved) if batch.match_rate_ai_resolved is not None else None,
+        # FIX H4: use duration_ms (actual DB column) instead of phantom throughput_ms attribute
+        throughput_ms=batch.duration_ms if batch.duration_ms else None
     )
 
 
@@ -165,11 +178,17 @@ def get_batch_audit_log(
     """Returns immutable audit events for a batch, optionally filtered by event_type."""
     query = db.query(AuditLog).filter(AuditLog.batch_id == batch_id)
     if event_type:
-        query = query.filter(AuditLog.event_type == AuditEventType(event_type))
+        try:
+            parsed_type = AuditEventType(event_type)
+            query = query.filter(AuditLog.event_type == parsed_type)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid event_type '{event_type}'. Valid values are: {[e.value for e in AuditEventType]}"
+            )
     
     events = query.order_by(AuditLog.timestamp.asc()).all()
 
-    import json
     parsed_events = []
     for e in events:
         try:
@@ -190,3 +209,4 @@ def get_batch_audit_log(
         total=len(parsed_events),
         events=parsed_events
     )
+

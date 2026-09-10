@@ -1,8 +1,8 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import func
 import uuid
 
@@ -34,12 +34,17 @@ from backend.matching import run_deterministic_matching
 from backend.reasoning import run_batch_reasoning_pipeline
 from backend.audit import log_audit_event
 from backend.database import SessionLocal
+from backend.security import verify_api_key
 
 router = APIRouter(tags=["Reconciliation"])
 
 
 @router.post("/batches/{batch_id}/run-matching", response_model=MatchRunResponse)
-def trigger_matching(batch_id: uuid.UUID, db: Session = Depends(get_db)):
+def trigger_matching(
+    batch_id: uuid.UUID,
+    api_key: Optional[str] = Depends(verify_api_key),
+    db: Session = Depends(get_db)
+):
     """Triggers synchronous deterministic matching engine pass."""
     batch = db.query(Batch).filter(Batch.id == batch_id).first()
     if not batch:
@@ -48,6 +53,8 @@ def trigger_matching(batch_id: uuid.UUID, db: Session = Depends(get_db)):
     try:
         result = run_deterministic_matching(db=db, batch_id=batch_id)
         return MatchRunResponse(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
@@ -56,6 +63,7 @@ def trigger_matching(batch_id: uuid.UUID, db: Session = Depends(get_db)):
 async def trigger_reasoning(
     batch_id: uuid.UUID,
     background_tasks: BackgroundTasks,
+    api_key: Optional[str] = Depends(verify_api_key),
     db: Session = Depends(get_db)
 ):
     """
@@ -93,7 +101,7 @@ def list_exceptions(
     db: Session = Depends(get_db)
 ):
     """Returns paginated reasoning cards and exception records for human review."""
-    query = db.query(ReconciliationResult).filter(
+    base_filter = [
         ReconciliationResult.batch_id == batch_id,
         ReconciliationResult.status.in_([
             ReconciliationStatus.exception_unresolved,
@@ -101,13 +109,30 @@ def list_exceptions(
             ReconciliationStatus.human_approved,
             ReconciliationStatus.human_rejected
         ])
-    )
+    ]
 
     if status_filter:
-        query = query.filter(ReconciliationResult.status == ReconciliationStatus(status_filter))
+        try:
+            parsed_status = ReconciliationStatus(status_filter)
+            base_filter.append(ReconciliationResult.status == parsed_status)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid status filter '{status_filter}'."
+            )
 
-    total = query.count()
-    results = query.offset(offset).limit(limit).all()
+    # FIX A5: Separate count query from joinedload data query to prevent inflated / incorrect count
+    total = db.query(func.count(ReconciliationResult.id)).filter(*base_filter).scalar() or 0
+
+    # FIX H7: Eager-load all accessed relationships to eliminate N+1 queries per row
+    results = db.query(ReconciliationResult).filter(*base_filter).options(
+        joinedload(ReconciliationResult.settlement_record),
+        joinedload(ReconciliationResult.order_ledger),
+        joinedload(ReconciliationResult.reasoning_card),
+        selectinload(ReconciliationResult.exception_candidates).joinedload(
+            ExceptionCandidate.order_ledger
+        )
+    ).offset(offset).limit(limit).all()
 
     items = []
     for r in results:
@@ -179,6 +204,7 @@ def list_exceptions(
 def approve_reasoning_card(
     result_id: uuid.UUID,
     body: Optional[ApproveRequest] = None,
+    api_key: Optional[str] = Depends(verify_api_key),
     db: Session = Depends(get_db)
 ):
     """
@@ -187,7 +213,7 @@ def approve_reasoning_card(
     Prevents approving unexplained/unresolved cards.
     """
     reviewed_by = body.reviewed_by if body and body.reviewed_by else "accountant_user"
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     # Atomic conditional update
     rows_updated = db.query(ReconciliationResult).filter(
@@ -248,6 +274,7 @@ def approve_reasoning_card(
 def reject_reasoning_card(
     result_id: uuid.UUID,
     body: Optional[RejectRequest] = None,
+    api_key: Optional[str] = Depends(verify_api_key),
     db: Session = Depends(get_db)
 ):
     """
@@ -256,7 +283,7 @@ def reject_reasoning_card(
     """
     reviewed_by = body.reviewed_by if body and body.reviewed_by else "accountant_user"
     override_note = body.override_note if body else None
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     rows_updated = db.query(ReconciliationResult).filter(
         ReconciliationResult.id == result_id,

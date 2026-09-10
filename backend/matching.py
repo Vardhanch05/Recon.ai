@@ -72,6 +72,14 @@ def run_deterministic_matching(db: Session, batch_id: uuid.UUID) -> Dict[str, An
     matched_count = 0
     exception_count = 0
 
+    # Guard: Check if batch has any human_approved records before resetting
+    approved_count = db.query(func.count(ReconciliationResult.id)).filter(
+        ReconciliationResult.batch_id == batch_id,
+        ReconciliationResult.status == ReconciliationStatus.human_approved
+    ).scalar() or 0
+    if approved_count > 0:
+        raise ValueError("Cannot re-run matching on a batch that contains approved/posted records.")
+
     # Idempotency: Clear previous results if this batch is being re-run
     db.query(ReconciliationResult).filter(ReconciliationResult.batch_id == batch_id).delete()
     db.flush()

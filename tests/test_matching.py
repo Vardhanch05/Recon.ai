@@ -74,3 +74,9 @@ def test_deterministic_matching_and_approval_guards():
         json={"reviewed_by": "lead_accountant"}
     )
     assert double_reject.status_code == 409
+
+    # 7. Test invalid audit event_type filter returns 422 Unprocessable Entity
+    invalid_audit_res = client.get(f"/batches/{batch_id}/audit-log?event_type=non_existent_event_type")
+    assert invalid_audit_res.status_code == 422
+    assert "Invalid event_type" in invalid_audit_res.json()["detail"]
+
