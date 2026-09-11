@@ -17,7 +17,8 @@ from backend.models import (
     ReasoningCard,
     ExceptionCandidate,
     AuditEventType,
-    ResolutionSource
+    ResolutionSource,
+    DiscrepancyCategory
 )
 from backend.audit import log_audit_event
 from backend.config import GROQ_API_KEY, LLM_MODEL, LLM_TIMEOUT_SECONDS
@@ -181,37 +182,39 @@ def evaluate_hypotheses_deterministically(
                     "requires_human_review": False
                 }
 
-    # 4. Partial Refund Deduction
-    gap = billed_amount - settled_amount
-    refund_candidates = [known_refund] if (known_refund and known_refund > 0) else [100.0, 150.0, 200.0]
-    for fee in [0.0, 2.0, 3.0]:
-        for refund_candidate in refund_candidates:
-            if refund_candidate and refund_candidate > 0:
-                for gst in [0.0, 18.0]:
-                    calc = calculate_difference(billed_amount, settled_amount, fee_pct=fee, gst_on_fee_pct=gst, refund_amount=refund_candidate)
-                    attempts.append(f"refund_{int(refund_candidate)}_fee_{fee}")
-                    if abs(calc["residual_gap"]) <= 0.05:
-                        return {
-                            "hypothesis_text": f"Shortfall matches a customer partial refund of ₹{refund_candidate:.2f}" + (f" combined with {fee}% MDR and GST." if fee > 0 else "."),
-                            "calculation_breakdown": calc,
-                            "confidence_score": 0.99,
-                            "suggested_category": "PARTIAL_REFUND",
-                            "requires_human_review": False
-                        }
+    # 4. Partial Refund Deduction (evaluated when order ledger indicates a known refund)
+    if known_refund and known_refund > 0:
+        for fee in [0.0, 2.0, 3.0]:
+            for gst in [0.0, 18.0]:
+                calc = calculate_difference(billed_amount, settled_amount, fee_pct=fee, gst_on_fee_pct=gst, refund_amount=known_refund)
+                attempts.append(f"refund_{int(known_refund)}_fee_{fee}")
+                if abs(calc["residual_gap"]) <= 0.05:
+                    return {
+                        "hypothesis_text": f"Shortfall matches a customer partial refund of ₹{known_refund:.2f}" + (f" combined with {fee}% MDR and GST." if fee > 0 else "."),
+                        "calculation_breakdown": calc,
+                        "confidence_score": 0.99,
+                        "suggested_category": DiscrepancyCategory.PARTIAL_REFUND.value,
+                        "requires_human_review": False
+                    }
 
-    # 5. Combined Cause: 3% Intl MDR + 18% GST + Flat Surcharge + Refund
+    # 5. Combined Cause: 3% Intl MDR + 18% GST + Flat Surcharge (+ Optional Known Refund)
     for surcharge in [10.0, 15.0]:
-        for refund in [100.0, 150.0, 200.0]:
-            calc = calculate_difference(billed_amount, settled_amount, fee_pct=3.0, gst_on_fee_pct=18.0, flat_surcharge=surcharge, refund_amount=refund)
-            attempts.append(f"combined_intl3_gst18_sur{int(surcharge)}_ref{int(refund)}")
-            if abs(calc["residual_gap"]) <= 0.05:
-                return {
-                    "hypothesis_text": f"Shortfall matches combined 3% international MDR with 18% GST, flat ₹{int(surcharge)} surcharge, and ₹{refund:.2f} partial refund.",
-                    "calculation_breakdown": calc,
-                    "confidence_score": 0.99,
-                    "suggested_category": "MDR_VARIANCE",
-                    "requires_human_review": False
-                }
+        refund_val = known_refund if (known_refund and known_refund > 0) else 0.0
+        calc = calculate_difference(billed_amount, settled_amount, fee_pct=3.0, gst_on_fee_pct=18.0, flat_surcharge=surcharge, refund_amount=refund_val)
+        attempts.append(f"combined_intl3_gst18_sur{int(surcharge)}_ref{int(refund_val)}")
+        if abs(calc["residual_gap"]) <= 0.05:
+            text = f"Shortfall matches combined 3% international MDR with 18% GST and flat ₹{int(surcharge)} surcharge"
+            if refund_val > 0:
+                text += f", and ₹{refund_val:.2f} partial refund."
+            else:
+                text += "."
+            return {
+                "hypothesis_text": text,
+                "calculation_breakdown": calc,
+                "confidence_score": 0.99,
+                "suggested_category": DiscrepancyCategory.MDR_VARIANCE.value,
+                "requires_human_review": False
+            }
 
     # 6. Minor FX Rounding variance (<= ₹0.50)
     for fee in [2.0, 3.0]:
@@ -223,7 +226,7 @@ def evaluate_hypotheses_deterministically(
                     "hypothesis_text": f"Shortfall matches {int(fee)}% MDR conversion with a minor FX rounding variance of ₹{abs(calc['residual_gap']):.2f}.",
                     "calculation_breakdown": calc,
                     "confidence_score": 0.92,
-                    "suggested_category": "FX_ROUNDING",
+                    "suggested_category": DiscrepancyCategory.FX_ROUNDING.value,
                     "requires_human_review": False
                 }
 
@@ -238,7 +241,7 @@ def evaluate_hypotheses_deterministically(
             "attempts_tried": attempts[:6]
         },
         "confidence_score": 0.0,
-        "suggested_category": "UNRESOLVED",
+        "suggested_category": DiscrepancyCategory.UNRESOLVED.value,
         "requires_human_review": True
     }
 
@@ -348,10 +351,25 @@ async def process_single_exception(
     Builds context, invokes LLM/rule hypothesis testing, applies server-side validate_card override,
     and returns (validated_card, actor).
     """
-    billed_amount = candidate_order.get("billed_amount") if candidate_order else settlement_data["settled_amount"]
+    if not candidate_order:
+        # No candidate order found to match against. Return UNRESOLVED card with 0 confidence immediately.
+        unresolved_card = {
+            "hypothesis_text": "No candidate order ledger entry found to reconcile against.",
+            "calculation_breakdown": {
+                "billed_amount": None,
+                "actual_settlement": settlement_data["settled_amount"],
+                "residual_gap": settlement_data["settled_amount"]
+            },
+            "confidence_score": 0.0,
+            "suggested_category": DiscrepancyCategory.UNRESOLVED.value,
+            "requires_human_review": True
+        }
+        return unresolved_card, "rule_reasoner"
+
+    billed_amount = candidate_order["billed_amount"]
     settled_amount = settlement_data["settled_amount"]
-    is_intl = candidate_order.get("is_international", False) if candidate_order else False
-    refund_amount = candidate_order.get("refund_amount", 0.0) if candidate_order else 0.0
+    is_intl = candidate_order.get("is_international", False)
+    refund_amount = candidate_order.get("refund_amount", 0.0)
 
     raw_card = None
     actor = "rule_reasoner"
@@ -384,6 +402,7 @@ async def run_batch_reasoning_pipeline(batch_id: uuid.UUID, db_session_factory) 
     """
     start_time = datetime.now(timezone.utc).replace(tzinfo=None)
     db: Session = db_session_factory()
+    COMMIT_BATCH_SIZE = 10
     try:
         batch = db.query(Batch).filter(Batch.id == batch_id).first()
         if not batch:
@@ -397,6 +416,7 @@ async def run_batch_reasoning_pipeline(batch_id: uuid.UUID, db_session_factory) 
 
         ai_resolved_count = 0
         unresolved_count = 0
+        processed_count = 0
 
         for exc in exceptions:
             settle_rec = exc.settlement_record
@@ -409,7 +429,7 @@ async def run_batch_reasoning_pipeline(batch_id: uuid.UUID, db_session_factory) 
             }
             ledger_dict = {
                 "order_id": ledger_rec.order_id if ledger_rec else None,
-                "billed_amount": float(ledger_rec.billed_amount) if ledger_rec else float(settle_rec.settled_amount),
+                "billed_amount": float(ledger_rec.billed_amount) if ledger_rec else None,
                 "is_international": ledger_rec.is_international if ledger_rec else False,
                 "refund_amount": float(ledger_rec.refund_amount) if ledger_rec and ledger_rec.refund_amount else 0.0,
                 "payment_method": ledger_rec.payment_method if ledger_rec else "card"
@@ -454,7 +474,7 @@ async def run_batch_reasoning_pipeline(batch_id: uuid.UUID, db_session_factory) 
                 exc.confidence_score = card_dict["confidence_score"]
                 unresolved_count += 1
 
-            # FIX A11: Truthful audit actor
+            # Truthful audit actor
             log_audit_event(
                 db=db,
                 batch_id=batch_id,
@@ -468,17 +488,21 @@ async def run_batch_reasoning_pipeline(batch_id: uuid.UUID, db_session_factory) 
                 }
             )
 
+            processed_count += 1
+            if processed_count % COMMIT_BATCH_SIZE == 0:
+                db.commit()
+
         # Finalize batch status and rates
         total_records = batch.total_records or 1
-        deterministic_count = (batch.total_records or 0) - len(exceptions)
         match_rate_ai = round((ai_resolved_count / total_records * 100.0), 2)
         
         batch.status = BatchStatus.reasoning_complete
+        batch.matched_ai_resolved_count = ai_resolved_count
         batch.match_rate_ai_resolved = match_rate_ai
         batch.unresolved_count = unresolved_count
 
         elapsed_ms = int((datetime.now(timezone.utc).replace(tzinfo=None) - start_time).total_seconds() * 1000)
-        batch.duration_ms = elapsed_ms  # FIX H4: use the actual DB column, not setattr
+        batch.duration_ms = elapsed_ms
 
         db.commit()
 

@@ -170,12 +170,12 @@ def run_deterministic_matching(db: Session, batch_id: uuid.UUID) -> Dict[str, An
             matched_count += 1
 
         else:
-            # ---- Path D: Ambigious or Unmatched Exceptions ----
+            # ---- Path D: Ambiguous or Unmatched Exceptions ----
             exception_count += 1
             reason = RoutingReason.no_match
             if len(candidates) > 1:
                 reason = RoutingReason.ambiguous_multiple
-            elif s.currency != "INR":
+            elif s.currency and s.currency != "INR":
                 reason = RoutingReason.currency_mismatch
 
             res = ReconciliationResult(
@@ -206,6 +206,7 @@ def run_deterministic_matching(db: Session, batch_id: uuid.UUID) -> Dict[str, An
     match_rate = round((matched_count / total_records * 100.0), 2) if total_records > 0 else 0.0
     
     batch.status = BatchStatus.matching_complete
+    batch.matched_deterministic_count = matched_count
     batch.match_rate_deterministic = match_rate
     batch.unresolved_count = exception_count
     

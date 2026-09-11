@@ -18,20 +18,35 @@ except ImportError:
 
 def clean_currency(val: Any) -> float:
     """Standardizes currency strings to clean floats.
-    ex:  clean_currency("₹1,200.50") -> 1200.50
-         clean_currency("$49.00")    -> 49.00
-         clean_currency(None)        -> 0.0
+    Handles symbols (₹, $, €, £, ¥, ₩), ISO codes, commas, accounting negatives
+    (e.g., ($500)), and explicit negative signs.
     """
     if val is None:
         return 0.0
     if isinstance(val, (int, float)):
         return float(val)
-    clean_str = (
-        str(val).replace("₹", "").replace("$", "").replace("€", "").replace(",", "").strip()
-    )
-    if not clean_str:
+    
+    val_str = str(val).strip()
+    if not val_str:
         return 0.0
-    return float(clean_str)
+    
+    is_negative = False
+    if val_str.startswith("(") and val_str.endswith(")"):
+        is_negative = True
+        val_str = val_str[1:-1].strip()
+    elif "-" in val_str:
+        is_negative = True
+        val_str = val_str.replace("-", "").strip()
+
+    for symbol in ["₹", "$", "€", "£", "¥", "₩", ",", "INR", "USD", "EUR", "GBP"]:
+        val_str = val_str.replace(symbol, "")
+    val_str = val_str.strip()
+
+    if not val_str:
+        return 0.0
+
+    parsed = float(val_str)
+    return -parsed if is_negative else parsed
 
 
 def parse_datetime(val: Any) -> datetime:

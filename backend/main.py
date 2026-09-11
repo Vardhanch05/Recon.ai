@@ -1,4 +1,5 @@
 import os
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,15 +11,22 @@ import backend.models as models
 from backend.routes.batches import router as batches_router
 from backend.routes.reconciliation import router as reconciliation_router
 from backend.routes.reports import router as reports_router
+from backend.logging_config import setup_logging
+from backend.config import ENVIRONMENT
+
+# Initialize structured logging
+logger = setup_logging(environment=ENVIRONMENT)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Attempt DB table creation on startup
     try:
         Base.metadata.create_all(bind=engine)
+        logger.info("Database schema initialized successfully.")
     except Exception as e:
-        print(f"Notice: Could not automatically create tables at startup: {e}")
+        logger.warning(f"Notice: Could not automatically create tables at startup: {e}")
     yield
+    logger.info("Application shutdown completed.")
 
 app = FastAPI(
     title="Recon.ai API",
@@ -28,7 +36,6 @@ app = FastAPI(
 )
 
 # Enable CORS for React Frontend
-# FIX C3: Wildcard "*" removed. Use ALLOWED_ORIGINS env var in production.
 _raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000")
 ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
@@ -53,6 +60,7 @@ def health_check(db: Session = Depends(get_db)):
         db_status = "connected"
     except Exception as e:
         db_status = f"error: {str(e)}"
+        logger.error(f"Health check DB connection failed: {e}")
     
     return {
         "status": "ok",

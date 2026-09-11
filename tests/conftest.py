@@ -1,12 +1,11 @@
 import pytest
 import os
-
-# Set test environment variable to SQLite for instant, zero-dependency testing
-os.environ["DATABASE_URL"] = "sqlite:///:memory:"
-
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+
+# Ensure in-memory database for tests
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 
 from backend.database import Base, get_db
 from backend.main import app
@@ -21,8 +20,10 @@ test_engine = create_engine(
 
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 
-@pytest.fixture(scope="session", autouse=True)
-def setup_test_db():
+@pytest.fixture(autouse=True)
+def clean_test_db():
+    """Provides complete test isolation by recreating the schema for every test."""
+    Base.metadata.drop_all(bind=test_engine)
     Base.metadata.create_all(bind=test_engine)
     yield
     Base.metadata.drop_all(bind=test_engine)

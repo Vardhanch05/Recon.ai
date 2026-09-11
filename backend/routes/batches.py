@@ -16,6 +16,7 @@ from backend.security import verify_api_key
 router = APIRouter(prefix="/batches", tags=["Batches"])
 
 MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB limit
+MAX_ROW_COUNT = 50000  # 50,000 records maximum per batch upload
 
 @router.post("/upload", response_model=UploadResponse, status_code=status.HTTP_200_OK)
 async def upload_batch(
@@ -30,6 +31,12 @@ async def upload_batch(
     Ingests settlement and ledger CSV files, creates a new batch,
     populates settlement_records and order_ledger, and logs any ingestion errors.
     """
+    if not (settlement_file.filename or "").lower().endswith(".csv") or not (ledger_file.filename or "").lower().endswith(".csv"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only CSV files (.csv) are accepted for upload."
+        )
+
     settlement_bytes = await settlement_file.read()
     ledger_bytes = await ledger_file.read()
 
@@ -43,6 +50,14 @@ async def upload_batch(
     valid_settlements, settlement_errors = parse_settlement_csv(settlement_bytes)
     valid_ledgers, ledger_errors = parse_ledger_csv(ledger_bytes)
 
+    total_settlement_rows = len(valid_settlements) + len(settlement_errors)
+    total_ledger_rows = len(valid_ledgers) + len(ledger_errors)
+    if total_settlement_rows > MAX_ROW_COUNT or total_ledger_rows > MAX_ROW_COUNT:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File exceeds maximum allowed limit of {MAX_ROW_COUNT} rows per batch."
+        )
+
     total_ingestion_errors = len(settlement_errors) + len(ledger_errors)
 
     if not valid_settlements and not valid_ledgers:
@@ -51,26 +66,29 @@ async def upload_batch(
             detail="No valid rows could be parsed from the provided files."
         )
 
-    # Create Batch record
-    batch = Batch(
-        id=uuid.uuid4(),
-        uploaded_at=datetime.now(timezone.utc).replace(tzinfo=None),
-        status=BatchStatus.uploaded,
-        total_records=len(valid_settlements),
-        ingestion_error_count=total_ingestion_errors,
-        timestamp_tolerance_seconds=timestamp_tolerance_seconds
-    )
-    db.add(batch)
-    db.flush()
-
-    # Insert settlement records (skip intra-file duplicates if any)
+    # Deduplicate settlement records by gateway_txn_id
     seen_gateway_txns = set()
+    settlement_records_to_insert = []
     for row in valid_settlements:
         if row["gateway_txn_id"] in seen_gateway_txns:
             total_ingestion_errors += 1
             continue
         seen_gateway_txns.add(row["gateway_txn_id"])
-        
+        settlement_records_to_insert.append(row)
+
+    # Create Batch record directly with final deduplicated count
+    batch = Batch(
+        id=uuid.uuid4(),
+        uploaded_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        status=BatchStatus.uploaded,
+        total_records=len(seen_gateway_txns),
+        ingestion_error_count=total_ingestion_errors,
+        timestamp_tolerance_seconds=timestamp_tolerance_seconds
+    )
+    db.add(batch)
+
+    # Insert settlement records
+    for row in settlement_records_to_insert:
         db.add(SettlementRecord(
             id=uuid.uuid4(),
             batch_id=batch.id,
@@ -112,8 +130,6 @@ async def upload_batch(
             }
         )
 
-    batch.total_records = len(seen_gateway_txns)
-    batch.ingestion_error_count = total_ingestion_errors
     db.commit()
     db.refresh(batch)
 

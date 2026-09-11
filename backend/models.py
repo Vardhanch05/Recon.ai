@@ -3,7 +3,7 @@ import enum
 from datetime import datetime, timezone
 from sqlalchemy import (
     Column, String, Float, Integer, Boolean, DateTime, ForeignKey, Enum as SQLEnum,
-    Text, Index, UniqueConstraint, Numeric, types
+    Text, Index, UniqueConstraint, Numeric, types, event
 )
 from sqlalchemy.orm import relationship
 
@@ -11,6 +11,11 @@ try:
     from backend.database import Base
 except ImportError:
     from database import Base
+
+
+class ImmutableRecordError(Exception):
+    """Raised when an update or delete operation is attempted on an immutable record."""
+    pass
 
 def get_utc_now() -> datetime:
     """Returns current naive UTC timestamp."""
@@ -121,7 +126,8 @@ class Batch(Base):
     settlements = relationship("SettlementRecord", back_populates="batch", cascade="all, delete-orphan")
     ledger_entries = relationship("OrderLedger", back_populates="batch", cascade="all, delete-orphan")
     results = relationship("ReconciliationResult", back_populates="batch", cascade="all, delete-orphan")
-    audit_logs = relationship("AuditLog", back_populates="batch", cascade="all, delete-orphan")
+    # Audit logs are immutable and must NOT be deleted when a batch is deleted
+    audit_logs = relationship("AuditLog", back_populates="batch")
 
 
 class SettlementRecord(Base):
@@ -208,7 +214,7 @@ class ReasoningCard(Base):
     hypothesis_text = Column(Text, nullable=False)
     calculation_breakdown = Column(Text, nullable=False)  # JSON string
     confidence_score = Column(Numeric(5, 4), nullable=False)
-    suggested_category = Column(String, nullable=False)
+    suggested_category = Column(SQLEnum(DiscrepancyCategory, name="discrepancy_category_enum"), nullable=False)
     requires_human_review = Column(Boolean, default=True)
     human_override_note = Column(Text, nullable=True)
     created_at = Column(DateTime, default=get_utc_now)
@@ -220,7 +226,7 @@ class AuditLog(Base):
     __tablename__ = "audit_log"
 
     id = Column(GUID, primary_key=True, default=uuid.uuid4)
-    batch_id = Column(GUID, ForeignKey("batches.id", ondelete="CASCADE"), nullable=True)
+    batch_id = Column(GUID, ForeignKey("batches.id", ondelete="SET NULL"), nullable=True)
     event_type = Column(SQLEnum(AuditEventType), nullable=False)
     actor = Column(String, default="system", nullable=False)
     payload_json = Column(Text, nullable=True)  # JSON string
@@ -231,4 +237,20 @@ class AuditLog(Base):
     __table_args__ = (
         Index("idx_audit_batch_time", "batch_id", "timestamp"),
     )
+
+
+# --- ORM-level Immutability Enforcement for AuditLog ---
+@event.listens_for(AuditLog, "before_update")
+def _prevent_audit_log_update(mapper, connection, target):
+    from sqlalchemy import inspect
+    state = inspect(target)
+    for attr in state.attrs:
+        if attr.key in ("event_type", "actor", "payload_json", "timestamp") and attr.history.has_changes():
+            raise ImmutableRecordError("AuditLog records are immutable and cannot be updated.")
+
+
+@event.listens_for(AuditLog, "before_delete")
+def _prevent_audit_log_delete(mapper, connection, target):
+    raise ImmutableRecordError("AuditLog records are immutable and cannot be deleted.")
+
 

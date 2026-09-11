@@ -16,3 +16,9 @@ HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
 
+# In production, require API key by default unless explicitly disabled
+REQUIRE_API_KEY_ENV = os.getenv("REQUIRE_API_KEY")
+if REQUIRE_API_KEY_ENV is not None:
+    REQUIRE_API_KEY = REQUIRE_API_KEY_ENV.lower() in ("true", "1", "yes")
+else:
+    REQUIRE_API_KEY = (ENVIRONMENT.lower() == "production")

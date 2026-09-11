@@ -68,11 +68,29 @@ async def trigger_reasoning(
 ):
     """
     Triggers asynchronous LLM discrepancy reasoning pass on all exception records.
-    Returns job_id immediately; frontend polls /batches/{id}/summary.
+    Uses atomic conditional update to guarantee that duplicate concurrent requests cannot race.
     """
-    batch = db.query(Batch).filter(Batch.id == batch_id).first()
-    if not batch:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found")
+    # Single atomic SQL update: transition only if status is matching_complete
+    updated_rows = db.query(Batch).filter(
+        Batch.id == batch_id,
+        Batch.status == BatchStatus.matching_complete
+    ).update({
+        Batch.status: BatchStatus.reasoning_in_progress
+    }, synchronize_session="fetch")
+    db.commit()
+
+    if updated_rows == 0:
+        batch = db.query(Batch).filter(Batch.id == batch_id).first()
+        if not batch:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found")
+        if batch.status == BatchStatus.reasoning_in_progress:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Reasoning is already in progress for this batch.")
+        if batch.status == BatchStatus.reasoning_complete:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Reasoning has already been completed for this batch.")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Batch must be in matching_complete status before running reasoning (current: {batch.status.value})."
+        )
 
     job_id = uuid.uuid4()
     
