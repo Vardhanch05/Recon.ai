@@ -301,7 +301,8 @@ Respond strictly with valid JSON only in this schema:
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
+                "User-Agent": "ReconAI/1.0"
             },
             method="POST"
         )
