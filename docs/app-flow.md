@@ -3,156 +3,64 @@
 
 ---
 
-## Overview
+## High-Level User Journey
 
-The application has one primary user flow: an accountant uploads two CSV files, runs a two-stage reconciliation pipeline, reviews AI-generated reasoning cards, and approves or rejects each one. The entire flow is designed to be completable in a single session.
-
----
-
-## Flow 1: Upload & Ingest
+The application provides an intuitive, accountant-friendly financial workflow:
 
 ```
-Accountant lands on dashboard
-  → Sees UploadPanel with two file inputs: "Settlement File" and "Order Ledger"
-  → Selects settlement.csv
-  → Selects ledger.csv
-  → Optionally adjusts timestamp tolerance (advanced setting, default 2s)
-  → Clicks "Upload & Process"
-  → POST /batches/upload fires
-  → Backend parses both CSVs, writes to DB
-  → If ingestion errors: dashboard shows "X rows skipped — see audit log"
-  → batch.status = 'uploaded'
-  → "Run Matching" button becomes enabled
+[ Upload CSVs ] ──► [ Deterministic Match (80%) ] ──► [ AI Reasoner (14%) ] ──► [ Review & Approve ] ──► [ Journal Posted ]
 ```
 
 ---
 
-## Flow 2: Deterministic Matching
+## Step-by-Step Pipeline Flow
 
-```
-Accountant clicks "Run Matching"
-  → POST /batches/{id}/run-matching fires (synchronous)
-  → Loading spinner shown
-  → Backend runs matching engine:
-      - order_id primary match
-      - fee-adjusted amount+timestamp fallback
-      - exceptions tagged with routing_reason
-  → Response returns
-  → MatchRateSummaryCard updates:
-      - "44 of 55 matched automatically (80%)"
-      - "11 exceptions routed to AI review"
-  → batch.status = 'matching_complete'
-  → "Run AI Reasoning" button becomes enabled
-```
+### 1. Ingestion Stage
+1. User lands on the Recon.ai dashboard.
+2. User drags and drops `settlement.csv` and `ledger.csv` into the `UploadPanel`.
+3. User selects optional fallback timestamp tolerance (default: 2s).
+4. User clicks **"Upload & Ingest Batch"** $\rightarrow$ `POST /batches/upload`.
+5. Backend parses files, sanitizes dirty currency symbols, logs any row-level ingestion errors to `audit_log`, and commits records.
+6. The UI transitions to the **"Uploaded"** state and unlocks the deterministic matching trigger.
 
----
+### 2. Deterministic Matching Stage
+1. User clicks **"Run Matching"** $\rightarrow$ `POST /batches/{id}/run-matching`.
+2. Backend executes two-pass deterministic matching in <200ms:
+   - Pass 1: Order ID lookup + fee sanity verification.
+   - Pass 2: Timestamp and fee-adjusted amount fallback lookup.
+3. Summary stats immediately update:
+   - **44 of 55 records matched deterministically (80%)**.
+   - **11 exceptions** routed for AI discrepancy analysis.
+4. Pipeline stepper marks Step 2 complete and unlocks Step 3.
 
-## Flow 3: LLM Reasoning
+### 3. AI Discrepancy Reasoning Stage
+1. User clicks **"Run AI Reasoning"** $\rightarrow$ `POST /batches/{id}/run-reasoning`.
+2. Backend validates batch status atomically and launches the async LLM reasoner in `BackgroundTasks`.
+3. Frontend begins polling `GET /batches/{id}/summary` every 2 seconds.
+4. The LLM processes exception records, invoking `calculate_difference()` to verify arithmetic against standard fee/GST/refund tiers.
+5. Server-side `validate_card()` computes mathematically bounded confidence scores.
+6. When reasoning completes, `ExceptionList` populates with interactive `ReasoningCard` items.
 
-```
-Accountant clicks "Run AI Reasoning"
-  → POST /batches/{id}/run-reasoning fires
-  → Returns job_id immediately (async)
-  → Frontend begins polling GET /batches/{id}/summary every 2 seconds
-  → Progress indicator: "Analyzing 11 exceptions..."
-  → Backend processes exceptions in parallel via LangChain .batch()
-      - Each exception: build context → LLM call → tool call → validate_card → write DB
-  → When batch.status = 'reasoning_complete':
-      - MatchRateSummaryCard finalizes:
-          "80% deterministic | 12.7% AI-resolved | 6% unresolved"
-          "Total processing time: 8.3 seconds"
-      - ExceptionList populates with reasoning cards
-      - "Review Exceptions" section scrolls into view
-```
+### 4. Human Review & Approval Gate
+1. Accountant reviews each card in `ExceptionList`:
+   - **Discrepancy Category Badge** (`MDR_VARIANCE`, `PARTIAL_REFUND`, `FX_ROUNDING`, `DOMESTIC_MDR`, `UNRESOLVED`).
+   - **Confidence Score Pill** (Green: $\ge 0.70$, Amber: $0.30 - 0.69$, Red: $0.00$).
+   - **Hypothesis Explanation**.
+   - **"Show Calculation Breakdown"** expandable table verifying expected vs settled amounts and residual gap.
+2. Accountant actions:
+   - **Approve**: Clicks **Approve** $\rightarrow$ `POST /reconciliation/{id}/approve`. Server validates status atomically, marks record `human_approved`, creates journal posting, and emits an immutable audit event. Card transitions to a green approved state.
+   - **Reject**: Clicks **Reject** $\rightarrow$ opens modal for optional accountant notes $\rightarrow$ `POST /reconciliation/{id}/reject`. Card transitions to a rejected manual review state.
+   - **Concurrency Guard**: If double-clicked, UI catches HTTP 409 and displays a non-blocking toast notification.
 
----
+### 5. Audit Log Inspection
+1. Accountant switches to the **Audit Log** tab.
+2. Streams real-time events (`ingestion_error`, `match`, `llm_call`, `human_approval`, `human_rejection`, `journal_posted`).
+3. User filters events by event type and reviews JSON payloads.
 
-## Flow 4: Exception Review & Approval
-
-```
-Accountant sees ExceptionList
-  → Each ReasoningCard shows:
-      - Transaction ID + discrepancy amount (e.g., "₹34.20 shortfall")
-      - Hypothesis text (e.g., "Matches 18% GST on 3% international MDR fee")
-      - Calculation breakdown table (expandable):
-          Billed amount: ₹1000.00
-          Fee (3%):       ₹30.00
-          GST on fee:     ₹5.40
-          Expected:       ₹964.60
-          Actual:         ₹964.60
-          Residual gap:   ₹0.00
-      - Confidence badge: 0.94 (green) / 0.52 (amber) / 0.00 (red UNRESOLVED)
-      - Category tag: MDR_VARIANCE / PARTIAL_REFUND / FX_ROUNDING / UNRESOLVED
-      - [Approve] [Reject] buttons
-
-  → Accountant reviews the math table (not just the prose)
-  → Clicks [Approve]:
-      - POST /reconciliation/{id}/approve fires
-      - Atomic DB update: status = 'human_approved'
-      - Card renders with green "Approved" badge
-      - Journal entry posted
-      - Audit log entry written
-
-  → OR clicks [Reject]:
-      - Modal prompts: "Add a note? (optional)"
-      - POST /reconciliation/{id}/reject fires
-      - Card renders with red "Rejected — Manual Review Required" badge
-      - No journal entry posted
-
-  → If double-click: second request gets 409, UI shows "Already actioned"
-```
-
----
-
-## Flow 5: Audit Log Review
-
-```
-Accountant scrolls to AuditLogViewer (or clicks "View Audit Log" tab)
-  → Sees chronological event stream:
-      [2024-01-15 14:30:01] system    | match           | order_id:ORD-001 → ledger:L-001
-      [2024-01-15 14:30:02] llm       | llm_call        | exception:EXC-003, hypothesis:MDR_VARIANCE
-      [2024-01-15 14:31:15] user:u001 | human_approval  | result:REC-007, card:RC-003
-      [2024-01-15 14:31:22] system    | journal_posted  | result:REC-007
-  → Can filter by event type (match / llm_call / human_approval / etc.)
-  → Can filter by date range
-  → Read-only — no edit controls
-```
-
----
-
-## Flow 6: Accuracy Report (Demo/Judge Flow)
-
-```
-Accountant (or judge) clicks "View Accuracy Report"
-  → GET /batches/{id}/accuracy-report fires
-  → Backend joins reasoning_cards.suggested_category against ground_truth.csv
-  → Dashboard shows confusion matrix:
-      Explainable records:  7 of 7 correctly categorized (100%)
-      Unresolvable records: 3 of 3 correctly flagged UNRESOLVED (100%)
-      Overall accuracy:     10 of 10 non-trivial records correct
-  → This is the live verifiable accuracy claim
-```
-
----
-
-## State Transitions
-
-```
-batch.status:
-  uploaded → matching_complete → reasoning_complete
-                                      ↓
-                              (per reconciliation_result)
-  pending → human_approved → journal_posted
-         → human_rejected  → manual_handling
-```
-
----
-
-## Error States
-
-| Scenario | UI Behavior |
-|---|---|
-| CSV parse error | "X rows could not be parsed — check audit log for details" |
-| LLM API timeout | Card shows "AI reasoning unavailable — manual review required" |
-| Double approve/reject | Toast: "This card was already actioned" (409 handled silently) |
-| Duplicate batch upload | Modal: "A batch with this name already exists. Overwrite?" |
+### 6. Live Accuracy Evaluation (Demo / Judge Flow)
+1. User clicks the **"Accuracy Report"** button in the header.
+2. Frontend calls `GET /batches/{id}/accuracy-report?ground_truth_path=data/ground_truth.csv`.
+3. A modal renders a live confusion matrix:
+   - Explainable Accuracy: **7 / 7 (100%)**
+   - Unresolvable Accuracy: **3 / 3 (100%)**
+   - Overall Accuracy: **10 / 10 non-trivial records (100%)**

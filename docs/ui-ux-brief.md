@@ -5,108 +5,73 @@
 
 ## Design Principles
 
-1. **Verifiable over impressive** — every AI output must show the math, not just the conclusion. Judges and accountants need to see numbers, not prose.
-2. **Pipeline visibility** — the user should always know which stage the batch is in and what to do next.
-3. **Human-first approval** — the UI should make it obvious that no action is final until the accountant clicks Approve.
-4. **Honest exception handling** — UNRESOLVED cards should look different but not broken. They are a feature.
+1. **Mathematical Transparency**: Every AI-suggested conclusion is backed by an expandable calculation breakdown showing exact billed, fee, GST, refund, expected settlement, and residual gap figures.
+2. **Deterministic Clarity & Pipeline Stepper**: Clear 4-stage pipeline stepper guiding the accountant through Ingestion, Matching, AI Reasoning, and Human Review.
+3. **Strict Human Gate**: Unresolved records cannot be approved to post funds; approved cards provide immediate visual confirmation of journal posting.
+4. **Honest Exception Demarcation**: Unresolvable records are highlighted with distinct amber tags, transparently explaining that no standard fee schedule closes the residual gap.
 
 ---
 
-## Layout Structure
+## Component Hierarchy & Specifications
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  HEADER: "Settlement Reconciler" | batch selector | logo │
-├─────────────────────────────────────────────────────────┤
-│  PIPELINE STEPPER:                                        │
-│  [1. Upload ✓] → [2. Match ✓] → [3. AI Review ●] → [4. Done] │
-├───────────────────────┬─────────────────────────────────┤
-│  LEFT PANEL           │  RIGHT PANEL                    │
-│  MatchRateSummaryCard │  ExceptionList / AuditLogViewer │
-│  UploadPanel          │  (tabbed)                       │
-└───────────────────────┴─────────────────────────────────┘
-```
+### 1. `<Header />`
+- Branding: "Recon.ai" with Live Settlement Engine badge.
+- Action Buttons: "New Batch", "View Audit Trail", and "Accuracy Report".
+- Real-time batch ID indicator and status indicator pill.
 
----
+### 2. `<PipelineStepper />`
+- 4-Step Interactive Visual Flow:
+  1. **Upload & Ingest** (Completed / In-Progress / Pending)
+  2. **Deterministic Match** (Triggers `/run-matching` on click)
+  3. **AI Reasoning** (Triggers `/run-reasoning` with progress spinner)
+  4. **Human Review & Posting** (Status indicator)
 
-## Component Specs
+### 3. `<UploadPanel />`
+- Dual Drag-and-Drop Dropzones for `Settlement CSV` and `Ledger CSV`.
+- File size indicators and clear-file buttons.
+- Advanced settings toggle for `Timestamp Tolerance (seconds)`.
+- Primary CTA: "Upload & Ingest Batch" with animated loading state.
 
-### UploadPanel
-- Two drag-and-drop zones: "Settlement File (CSV)" and "Order Ledger (CSV)"
-- File name shown after selection
-- "Upload & Process" CTA button — disabled until both files selected
-- Advanced toggle: "Timestamp tolerance (seconds)" — default 2, hidden by default
+### 4. `<MatchRateSummaryCard />`
+- 3 Primary Metric Cards:
+  - **Deterministic Match Rate** (e.g., 80.0% / 44 records) in Emerald Green.
+  - **AI Discrepancy Resolved** (e.g., 12.7% / 7 records) in Indigo Purple.
+  - **Unresolved Exceptions** (e.g., 5.5% / 3 records) in Amber Warning.
+- Throughput Benchmarking: "Throughput: 4,200 ms" badge.
+- Row Error Alert banner when `ingestion_error_count > 0`.
 
-### Pipeline Stepper
-- Four steps: Upload → Match → AI Reasoning → Complete
-- Current step highlighted with a spinner if in progress
-- Completed steps show a checkmark
-- Blocked steps are greyed out and non-clickable
+### 5. `<ReasoningCard />` & `<ExceptionList />`
+- Filter Bar: All Exceptions, AI Resolved, Unresolved, Approved, Rejected.
+- Card Header: Transaction ID, Discrepancy Amount, Category Badge, and Mathematical Confidence Pill.
+- Body: Formatted AI hypothesis narrative.
+- Calculation Breakdown Drawer: Expandable breakdown table with checkmark indicator when `residual_gap == 0.00`.
+- Action Bar:
+  - Solid Green **Approve** button (triggers journal entry).
+  - Outlined Red **Reject** button (opens manual review modal).
+  - Post-action states: Green "Approved & Posted" / Red "Rejected".
 
-### MatchRateSummaryCard
-- Three stat blocks side by side:
-  - "80% Deterministic" (green)
-  - "14% AI-Resolved" (purple)
-  - "6% Unresolved" (amber)
-- Throughput timer: "Processed in 8.3s"
-- Ingestion error warning if count > 0: "⚠ 1 row skipped — see audit log"
-- Stats show "--" until the relevant stage completes
+### 6. `<AuditLogViewer />`
+- Full-width immutable event stream.
+- Filterable by `event_type` (`ingestion_error`, `match`, `llm_call`, `human_approval`, `human_rejection`, `journal_posted`).
+- Expandable JSON payload viewer with syntax formatting.
 
-### ReasoningCard
-- Header row: Transaction ID | Discrepancy Amount | Category badge | Confidence badge
-- Confidence badge colors:
-  - 0.70–0.99 → green
-  - 0.30–0.69 → amber
-  - 0.0 → red (UNRESOLVED)
-- Hypothesis text: single paragraph, plain language
-- "Show Calculation" toggle → expands math table:
-
-```
-┌────────────────────────────────────┐
-│ Billed Amount      ₹1,000.00       │
-│ Fee (3.0%)         ₹30.00          │
-│ GST on Fee (18%)   ₹5.40           │
-│ Flat Surcharge     ₹10.00          │
-│ Expected Settlement ₹954.60        │
-│ Actual Settlement   ₹954.60        │
-│ Residual Gap        ₹0.00 ✓        │
-└────────────────────────────────────┘
-```
-
-- Residual gap = 0.00 shows ✓ in green; non-zero shows the amount in amber/red
-- Approve button: solid green, full width
-- Reject button: outlined red, full width
-- After approval: card background turns light green, buttons replaced with "✓ Approved by [user]"
-- After rejection: card background turns light red, shows "✗ Rejected — Manual Review Required" + override note if present
-- UNRESOLVED cards: amber background, no approve/reject for the AI card (accountant must handle manually), shows the list of attempted hypotheses
-
-### AuditLogViewer
-- Table: Timestamp | Actor | Event Type | Description
-- Filter bar: event type dropdown + date range picker
-- Monospace font for payload details (expandable row)
-- No edit controls — read-only indicator in header
+### 7. `<AccuracyReportModal />`
+- Modal displaying live confusion matrix:
+  - True Positives (Explainable Discrepancies).
+  - True Negatives (Correctly Flagged Unresolved).
+  - False Positives & False Negatives.
+  - Category-by-category precision breakdown.
 
 ---
 
-## Color System
+## Design Tokens & Theme
 
-| Meaning | Color |
-|---|---|
-| Deterministic / system | Slate gray |
-| AI-resolved / in progress | Purple (#6c5ce7) |
-| Approved / success | Green (#00b894) |
-| Rejected / manual | Red (#d63031) |
-| Low confidence / warning | Amber (#e17055) |
-| Unresolved | Amber background (#ffeaa7) |
-| Neutral / background | White / light gray |
-
----
-
-## Key UX Rules
-
-- Never show a spinner without a status message explaining what's happening
-- The math table is not optional — it must be one click away on every AI-resolved card
-- UNRESOLVED is never shown as an error state — use neutral amber, not red
-- The pipeline stepper drives the "what to do next" UX — don't hide it
-- The [Approve] button should be the most visually prominent action on each card
-- 409 responses (double-click) show a brief non-intrusive toast, not a full error page
+- **Background**: Deep slate financial dark mode (`#0f172a` / `#1e293b`).
+- **Surface & Cards**: Glassmorphism cards with subtle border highlight (`rgba(255, 255, 255, 0.08)`).
+- **Accents**:
+  - Success / Match: Emerald (`#10b981`)
+  - AI Reasoning: Indigo / Violet (`#6366f1` / `#8b5cf6`)
+  - Warning / Unresolved: Amber (`#f59e0b`)
+  - Rejection / Error: Rose / Red (`#ef4444`)
+  - Primary Action: Blue (`#3b82f6`)
+- **Typography**: Inter / Outfit sans-serif with monospace styling for financial values and transaction IDs.
