@@ -1,0 +1,201 @@
+gateway_txn_id,order_id,true_category,true_cause,expected_residual_gap
+pay_exp_00801,ORD_00801,MDR_VARIANCE,3% international MDR with 18% GST on fee,0.0
+pay_exp_00802,ORD_00802,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_exp_00803,ORD_00803,MDR_VARIANCE,3% international MDR with 18% GST on fee,0.0
+pay_exp_00804,ORD_00804,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_exp_00805,ORD_00805,MDR_VARIANCE,3% international MDR with 18% GST on fee,0.0
+pay_exp_00806,ORD_00806,MDR_VARIANCE,3% international MDR plus flat ₹15 cross-border surcharge,0.0
+pay_exp_00807,ORD_00807,MDR_VARIANCE,"Combined 3% international MDR, 18% GST, flat surcharge, and partial refund",0.0
+pay_exp_00808,ORD_00808,MDR_VARIANCE,2% domestic MDR with 18% GST on fee,0.0
+pay_exp_00809,ORD_00809,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_exp_00810,ORD_00810,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_exp_00811,ORD_00811,FX_ROUNDING,Minor FX conversion rounding variance on international payout,0.0
+pay_exp_00812,ORD_00812,PARTIAL_REFUND,Partial refund of ₹300.0 deducted at settlement,0.0
+pay_exp_00813,ORD_00813,PARTIAL_REFUND,Partial refund of ₹300.0 deducted at settlement,0.0
+pay_exp_00814,ORD_00814,MDR_VARIANCE,2% domestic MDR with 18% GST on fee,0.0
+pay_exp_00815,ORD_00815,PARTIAL_REFUND,Partial refund of ₹300.0 deducted at settlement,0.0
+pay_exp_00816,ORD_00816,MDR_VARIANCE,3% international MDR with 18% GST on fee,0.0
+pay_exp_00817,ORD_00817,PARTIAL_REFUND,Partial refund of ₹150 combined with 18% GST on 2% MDR,0.0
+pay_exp_00818,ORD_00818,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_exp_00819,ORD_00819,MDR_VARIANCE,3% international MDR with 18% GST on fee,0.0
+pay_exp_00820,ORD_00820,MDR_VARIANCE,3% international MDR with 18% GST on fee,0.0
+pay_exp_00821,ORD_00821,MDR_VARIANCE,2% domestic MDR with 18% GST on fee,0.0
+pay_exp_00822,ORD_00822,MDR_VARIANCE,2% domestic MDR with 18% GST on fee,0.0
+pay_exp_00823,ORD_00823,PARTIAL_REFUND,Partial refund of ₹150 combined with 18% GST on 2% MDR,0.0
+pay_exp_00824,ORD_00824,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_exp_00825,ORD_00825,MDR_VARIANCE,"Combined 3% international MDR, 18% GST, flat surcharge, and partial refund",0.0
+pay_exp_00826,ORD_00826,MDR_VARIANCE,"Combined 3% international MDR, 18% GST, flat surcharge, and partial refund",0.0
+pay_exp_00827,ORD_00827,MDR_VARIANCE,3% international MDR with 18% GST on fee,0.0
+pay_exp_00828,ORD_00828,MDR_VARIANCE,2% domestic MDR with 18% GST on fee,0.0
+pay_exp_00829,ORD_00829,MDR_VARIANCE,2% domestic MDR with 18% GST on fee,0.0
+pay_exp_00830,ORD_00830,FX_ROUNDING,Minor FX conversion rounding variance on international payout,0.0
+pay_exp_00831,ORD_00831,PARTIAL_REFUND,Partial refund of ₹300.0 deducted at settlement,0.0
+pay_exp_00832,ORD_00832,FX_ROUNDING,Minor FX conversion rounding variance on international payout,0.0
+pay_exp_00833,ORD_00833,PARTIAL_REFUND,Partial refund of ₹300.0 deducted at settlement,0.0
+pay_exp_00834,ORD_00834,MDR_VARIANCE,3% international MDR plus flat ₹15 cross-border surcharge,0.0
+pay_exp_00835,ORD_00835,FX_ROUNDING,Minor FX conversion rounding variance on international payout,0.0
+pay_exp_00836,ORD_00836,MDR_VARIANCE,3% international MDR plus flat ₹15 cross-border surcharge,0.0
+pay_exp_00837,ORD_00837,MDR_VARIANCE,"Combined 3% international MDR, 18% GST, flat surcharge, and partial refund",0.0
+pay_exp_00838,ORD_00838,PARTIAL_REFUND,Partial refund of ₹150 combined with 18% GST on 2% MDR,0.0
+pay_exp_00839,ORD_00839,MDR_VARIANCE,2% domestic MDR with 18% GST on fee,0.0
+pay_exp_00840,ORD_00840,MDR_VARIANCE,"Combined 3% international MDR, 18% GST, flat surcharge, and partial refund",0.0
+pay_exp_00841,ORD_00841,MDR_VARIANCE,3% international MDR with 18% GST on fee,0.0
+pay_exp_00842,ORD_00842,MDR_VARIANCE,3% international MDR plus flat ₹15 cross-border surcharge,0.0
+pay_exp_00843,ORD_00843,MDR_VARIANCE,2% domestic MDR with 18% GST on fee,0.0
+pay_exp_00844,ORD_00844,MDR_VARIANCE,3% international MDR with 18% GST on fee,0.0
+pay_exp_00845,ORD_00845,MDR_VARIANCE,"Combined 3% international MDR, 18% GST, flat surcharge, and partial refund",0.0
+pay_exp_00846,ORD_00846,FX_ROUNDING,Minor FX conversion rounding variance on international payout,0.0
+pay_exp_00847,ORD_00847,MDR_VARIANCE,3% international MDR with 18% GST on fee,0.0
+pay_exp_00848,ORD_00848,MDR_VARIANCE,"Combined 3% international MDR, 18% GST, flat surcharge, and partial refund",0.0
+pay_exp_00849,ORD_00849,MDR_VARIANCE,2% domestic MDR with 18% GST on fee,0.0
+pay_exp_00850,ORD_00850,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_exp_00851,ORD_00851,PARTIAL_REFUND,Partial refund of ₹150 combined with 18% GST on 2% MDR,0.0
+pay_exp_00852,ORD_00852,PARTIAL_REFUND,Partial refund of ₹150 combined with 18% GST on 2% MDR,0.0
+pay_exp_00853,ORD_00853,MDR_VARIANCE,3% international MDR plus flat ₹15 cross-border surcharge,0.0
+pay_exp_00854,ORD_00854,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_exp_00855,ORD_00855,MDR_VARIANCE,3% international MDR with 18% GST on fee,0.0
+pay_exp_00856,ORD_00856,PARTIAL_REFUND,Partial refund of ₹150 combined with 18% GST on 2% MDR,0.0
+pay_exp_00857,ORD_00857,PARTIAL_REFUND,Partial refund of ₹150 combined with 18% GST on 2% MDR,0.0
+pay_exp_00858,ORD_00858,FX_ROUNDING,Minor FX conversion rounding variance on international payout,0.0
+pay_exp_00859,ORD_00859,MDR_VARIANCE,3% international MDR with 18% GST on fee,0.0
+pay_exp_00860,ORD_00860,PARTIAL_REFUND,Partial refund of ₹300.0 deducted at settlement,0.0
+pay_exp_00861,ORD_00861,MDR_VARIANCE,2% domestic MDR with 18% GST on fee,0.0
+pay_exp_00862,ORD_00862,PARTIAL_REFUND,Partial refund of ₹150 combined with 18% GST on 2% MDR,0.0
+pay_exp_00863,ORD_00863,MDR_VARIANCE,3% international MDR plus flat ₹15 cross-border surcharge,0.0
+pay_exp_00864,ORD_00864,MDR_VARIANCE,2% domestic MDR with 18% GST on fee,0.0
+pay_exp_00865,ORD_00865,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_exp_00866,ORD_00866,FX_ROUNDING,Minor FX conversion rounding variance on international payout,0.0
+pay_exp_00867,ORD_00867,MDR_VARIANCE,3% international MDR plus flat ₹15 cross-border surcharge,0.0
+pay_exp_00868,ORD_00868,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_exp_00869,ORD_00869,MDR_VARIANCE,3% international MDR plus flat ₹15 cross-border surcharge,0.0
+pay_exp_00870,ORD_00870,MDR_VARIANCE,"Combined 3% international MDR, 18% GST, flat surcharge, and partial refund",0.0
+pay_exp_00871,ORD_00871,MDR_VARIANCE,3% international MDR with 18% GST on fee,0.0
+pay_exp_00872,ORD_00872,MDR_VARIANCE,3% international MDR with 18% GST on fee,0.0
+pay_exp_00873,ORD_00873,MDR_VARIANCE,3% international MDR plus flat ₹15 cross-border surcharge,0.0
+pay_exp_00874,ORD_00874,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_exp_00875,ORD_00875,PARTIAL_REFUND,Partial refund of ₹150 combined with 18% GST on 2% MDR,0.0
+pay_exp_00876,ORD_00876,FX_ROUNDING,Minor FX conversion rounding variance on international payout,0.0
+pay_exp_00877,ORD_00877,MDR_VARIANCE,"Combined 3% international MDR, 18% GST, flat surcharge, and partial refund",0.0
+pay_exp_00878,ORD_00878,MDR_VARIANCE,2% domestic MDR with 18% GST on fee,0.0
+pay_exp_00879,ORD_00879,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_exp_00880,ORD_00880,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_exp_00881,ORD_00881,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_exp_00882,ORD_00882,MDR_VARIANCE,3% international MDR plus flat ₹15 cross-border surcharge,0.0
+pay_exp_00883,ORD_00883,MDR_VARIANCE,"Combined 3% international MDR, 18% GST, flat surcharge, and partial refund",0.0
+pay_exp_00884,ORD_00884,MDR_VARIANCE,3% international MDR with 18% GST on fee,0.0
+pay_exp_00885,ORD_00885,MDR_VARIANCE,"Combined 3% international MDR, 18% GST, flat surcharge, and partial refund",0.0
+pay_exp_00886,ORD_00886,MDR_VARIANCE,3% international MDR plus flat ₹15 cross-border surcharge,0.0
+pay_exp_00887,ORD_00887,MDR_VARIANCE,2% domestic MDR with 18% GST on fee,0.0
+pay_exp_00888,ORD_00888,PARTIAL_REFUND,Partial refund of ₹150 combined with 18% GST on 2% MDR,0.0
+pay_exp_00889,ORD_00889,FX_ROUNDING,Minor FX conversion rounding variance on international payout,0.0
+pay_exp_00890,ORD_00890,PARTIAL_REFUND,Partial refund of ₹150 combined with 18% GST on 2% MDR,0.0
+pay_exp_00891,ORD_00891,MDR_VARIANCE,2% domestic MDR with 18% GST on fee,0.0
+pay_exp_00892,ORD_00892,MDR_VARIANCE,2% domestic MDR with 18% GST on fee,0.0
+pay_exp_00893,ORD_00893,FX_ROUNDING,Minor FX conversion rounding variance on international payout,0.0
+pay_exp_00894,ORD_00894,MDR_VARIANCE,3% international MDR plus flat ₹15 cross-border surcharge,0.0
+pay_exp_00895,ORD_00895,MDR_VARIANCE,3% international MDR plus flat ₹15 cross-border surcharge,0.0
+pay_exp_00896,ORD_00896,MDR_VARIANCE,2% domestic MDR with 18% GST on fee,0.0
+pay_exp_00897,ORD_00897,MDR_VARIANCE,"Combined 3% international MDR, 18% GST, flat surcharge, and partial refund",0.0
+pay_exp_00898,ORD_00898,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_exp_00899,ORD_00899,PARTIAL_REFUND,Partial refund of ₹150 combined with 18% GST on 2% MDR,0.0
+pay_exp_00900,ORD_00900,MDR_VARIANCE,2% domestic MDR with 18% GST on fee,0.0
+pay_exp_00901,ORD_00901,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_exp_00902,ORD_00902,FX_ROUNDING,Minor FX conversion rounding variance on international payout,0.0
+pay_exp_00903,ORD_00903,FX_ROUNDING,Minor FX conversion rounding variance on international payout,0.0
+pay_exp_00904,ORD_00904,MDR_VARIANCE,3% international MDR plus flat ₹15 cross-border surcharge,0.0
+pay_exp_00905,ORD_00905,FX_ROUNDING,Minor FX conversion rounding variance on international payout,0.0
+pay_exp_00906,ORD_00906,MDR_VARIANCE,3% international MDR plus flat ₹15 cross-border surcharge,0.0
+pay_exp_00907,ORD_00907,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_exp_00908,ORD_00908,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_exp_00909,ORD_00909,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_exp_00910,ORD_00910,PARTIAL_REFUND,Partial refund of ₹150 combined with 18% GST on 2% MDR,0.0
+pay_exp_00911,ORD_00911,MDR_VARIANCE,"Combined 3% international MDR, 18% GST, flat surcharge, and partial refund",0.0
+pay_exp_00912,ORD_00912,PARTIAL_REFUND,Partial refund of ₹300.0 deducted at settlement,0.0
+pay_exp_00913,ORD_00913,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_exp_00914,ORD_00914,FX_ROUNDING,Minor FX conversion rounding variance on international payout,0.0
+pay_exp_00915,ORD_00915,PARTIAL_REFUND,Partial refund of ₹150 combined with 18% GST on 2% MDR,0.0
+pay_exp_00916,ORD_00916,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_exp_00917,ORD_00917,PARTIAL_REFUND,Partial refund of ₹300.0 deducted at settlement,0.0
+pay_exp_00918,ORD_00918,MDR_VARIANCE,2% domestic MDR with 18% GST on fee,0.0
+pay_exp_00919,ORD_00919,MDR_VARIANCE,"Combined 3% international MDR, 18% GST, flat surcharge, and partial refund",0.0
+pay_exp_00920,ORD_00920,PARTIAL_REFUND,Partial refund of ₹150 combined with 18% GST on 2% MDR,0.0
+pay_exp_00921,ORD_00921,MDR_VARIANCE,3% international MDR with 18% GST on fee,0.0
+pay_exp_00922,ORD_00922,MDR_VARIANCE,3% international MDR with 18% GST on fee,0.0
+pay_exp_00923,ORD_00923,PARTIAL_REFUND,Partial refund of ₹150 combined with 18% GST on 2% MDR,0.0
+pay_exp_00924,ORD_00924,MDR_VARIANCE,3% international MDR with 18% GST on fee,0.0
+pay_exp_00925,ORD_00925,PARTIAL_REFUND,Partial refund of ₹150 combined with 18% GST on 2% MDR,0.0
+pay_exp_00926,ORD_00926,MDR_VARIANCE,3% international MDR plus flat ₹15 cross-border surcharge,0.0
+pay_exp_00927,ORD_00927,PARTIAL_REFUND,Partial refund of ₹150 combined with 18% GST on 2% MDR,0.0
+pay_exp_00928,ORD_00928,MDR_VARIANCE,2% domestic MDR with 18% GST on fee,0.0
+pay_exp_00929,ORD_00929,MDR_VARIANCE,"Combined 3% international MDR, 18% GST, flat surcharge, and partial refund",0.0
+pay_exp_00930,ORD_00930,FX_ROUNDING,Minor FX conversion rounding variance on international payout,0.0
+pay_exp_00931,ORD_00931,MDR_VARIANCE,"Combined 3% international MDR, 18% GST, flat surcharge, and partial refund",0.0
+pay_exp_00932,ORD_00932,MDR_VARIANCE,3% international MDR plus flat ₹15 cross-border surcharge,0.0
+pay_exp_00933,ORD_00933,MDR_VARIANCE,2% domestic MDR with 18% GST on fee,0.0
+pay_exp_00934,ORD_00934,PARTIAL_REFUND,Partial refund of ₹300.0 deducted at settlement,0.0
+pay_exp_00935,ORD_00935,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_exp_00936,ORD_00936,MDR_VARIANCE,3% international MDR with 18% GST on fee,0.0
+pay_exp_00937,ORD_00937,MDR_VARIANCE,3% international MDR with 18% GST on fee,0.0
+pay_exp_00938,ORD_00938,FX_ROUNDING,Minor FX conversion rounding variance on international payout,0.0
+pay_exp_00939,ORD_00939,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_exp_00940,ORD_00940,MDR_VARIANCE,2% MDR plus flat ₹10 gateway surcharge,0.0
+pay_unres_00941,ORD_00941,UNRESOLVED,Unmatched cross-border ledger loss,393.89
+pay_unres_00942,ORD_00942,UNRESOLVED,Unregistered chargeback deduction,755.43
+pay_unres_00943,ORD_00943,UNRESOLVED,Unexplained bank shortfall of ₹350,458.18
+pay_unres_00944,ORD_00944,UNRESOLVED,Arbitrary bank holdback of ₹800,634.76
+pay_unres_00945,ORD_00945,UNRESOLVED,Unregistered chargeback deduction,252.67
+pay_unres_00946,ORD_00946,UNRESOLVED,Arbitrary bank holdback of ₹800,687.56
+pay_unres_00947,ORD_00947,UNRESOLVED,Unregistered chargeback deduction,394.87
+pay_unres_00948,ORD_00948,UNRESOLVED,Unregistered chargeback deduction,581.5
+pay_unres_00949,ORD_00949,UNRESOLVED,Unregistered chargeback deduction,579.66
+pay_unres_00950,ORD_00950,UNRESOLVED,Unregistered chargeback deduction,630.89
+pay_unres_00951,ORD_00951,UNRESOLVED,Unexplained bank shortfall of ₹350,508.58
+pay_unres_00952,ORD_00952,UNRESOLVED,Unregistered chargeback deduction,575.54
+pay_unres_00953,ORD_00953,UNRESOLVED,Unexplained bank shortfall of ₹350,355.79
+pay_unres_00954,ORD_00954,UNRESOLVED,Unmatched cross-border ledger loss,490.65
+pay_unres_00955,ORD_00955,UNRESOLVED,Unexplained bank shortfall of ₹350,662.81
+pay_unres_00956,ORD_00956,UNRESOLVED,Unmatched cross-border ledger loss,822.88
+pay_unres_00957,ORD_00957,UNRESOLVED,Unexplained bank shortfall of ₹350,414.95
+pay_unres_00958,ORD_00958,UNRESOLVED,Arbitrary bank holdback of ₹800,847.76
+pay_unres_00959,ORD_00959,UNRESOLVED,Arbitrary bank holdback of ₹800,780.03
+pay_unres_00960,ORD_00960,UNRESOLVED,Unexplained bank shortfall of ₹350,815.92
+pay_unres_00961,ORD_00961,UNRESOLVED,Arbitrary bank holdback of ₹800,941.8
+pay_unres_00962,ORD_00962,UNRESOLVED,Unregistered chargeback deduction,689.06
+pay_unres_00963,ORD_00963,UNRESOLVED,Unexplained bank shortfall of ₹350,758.97
+pay_unres_00964,ORD_00964,UNRESOLVED,Unregistered chargeback deduction,528.15
+pay_unres_00965,ORD_00965,UNRESOLVED,Unmatched cross-border ledger loss,892.01
+pay_unres_00966,ORD_00966,UNRESOLVED,Unexplained bank shortfall of ₹350,354.75
+pay_unres_00967,ORD_00967,UNRESOLVED,Unregistered chargeback deduction,643.88
+pay_unres_00968,ORD_00968,UNRESOLVED,Unregistered chargeback deduction,866.1
+pay_unres_00969,ORD_00969,UNRESOLVED,Unmatched cross-border ledger loss,589.91
+pay_unres_00970,ORD_00970,UNRESOLVED,Unmatched cross-border ledger loss,442.79
+pay_unres_00971,ORD_00971,UNRESOLVED,Arbitrary bank holdback of ₹800,872.7
+pay_unres_00972,ORD_00972,UNRESOLVED,Unregistered chargeback deduction,582.65
+pay_unres_00973,ORD_00973,UNRESOLVED,Unregistered chargeback deduction,822.17
+pay_unres_00974,ORD_00974,UNRESOLVED,Unexplained bank shortfall of ₹350,594.13
+pay_unres_00975,ORD_00975,UNRESOLVED,Unmatched cross-border ledger loss,409.57
+pay_unres_00976,ORD_00976,UNRESOLVED,Unmatched cross-border ledger loss,474.61
+pay_unres_00977,ORD_00977,UNRESOLVED,Arbitrary bank holdback of ₹800,312.5
+pay_unres_00978,ORD_00978,UNRESOLVED,Unregistered chargeback deduction,535.02
+pay_unres_00979,ORD_00979,UNRESOLVED,Unexplained bank shortfall of ₹350,610.69
+pay_unres_00980,ORD_00980,UNRESOLVED,Unexplained bank shortfall of ₹350,604.76
+pay_unres_00981,ORD_00981,UNRESOLVED,Unexplained bank shortfall of ₹350,862.63
+pay_unres_00982,ORD_00982,UNRESOLVED,Arbitrary bank holdback of ₹800,569.51
+pay_unres_00983,ORD_00983,UNRESOLVED,Unmatched cross-border ledger loss,826.45
+pay_unres_00984,ORD_00984,UNRESOLVED,Arbitrary bank holdback of ₹800,336.71
+pay_unres_00985,ORD_00985,UNRESOLVED,Unmatched cross-border ledger loss,665.83
+pay_unres_00986,ORD_00986,UNRESOLVED,Unregistered chargeback deduction,494.83
+pay_unres_00987,ORD_00987,UNRESOLVED,Unexplained bank shortfall of ₹350,732.2
+pay_unres_00988,ORD_00988,UNRESOLVED,Arbitrary bank holdback of ₹800,364.04
+pay_unres_00989,ORD_00989,UNRESOLVED,Arbitrary bank holdback of ₹800,703.17
+pay_unres_00990,ORD_00990,UNRESOLVED,Unexplained bank shortfall of ₹350,536.66
+pay_unres_00991,ORD_00991,UNRESOLVED,Unexplained bank shortfall of ₹350,342.62
+pay_unres_00992,ORD_00992,UNRESOLVED,Unregistered chargeback deduction,675.84
+pay_unres_00993,ORD_00993,UNRESOLVED,Unmatched cross-border ledger loss,513.53
+pay_unres_00994,ORD_00994,UNRESOLVED,Unmatched cross-border ledger loss,576.69
+pay_unres_00995,ORD_00995,UNRESOLVED,Unregistered chargeback deduction,255.14
+pay_unres_00996,ORD_00996,UNRESOLVED,Unregistered chargeback deduction,665.64
+pay_unres_00997,ORD_00997,UNRESOLVED,Unregistered chargeback deduction,587.22
+pay_unres_00998,ORD_00998,UNRESOLVED,Unregistered chargeback deduction,853.04
+pay_unres_00999,ORD_00999,UNRESOLVED,Unexplained bank shortfall of ₹350,612.11
+pay_unres_01000,ORD_01000,UNRESOLVED,Unmatched cross-border ledger loss,811.65
