@@ -30,7 +30,7 @@ with open("data/synthetic_batch_large.csv", "rb") as sf, open("data/ledger_large
             "settlement_file": ("synthetic_batch_large.csv", sf.read(), "text/csv"),
             "ledger_file": ("ledger_large.csv", lf.read(), "text/csv")
         },
-        data={"timestamp_tolerance_seconds": 2}
+        data={"timestamp_tolerance_seconds": 2, "confirm_overwrite": True}
     )
 t_ingest = (time.perf_counter() - t0) * 1000
 

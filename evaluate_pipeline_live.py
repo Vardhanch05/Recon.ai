@@ -29,7 +29,7 @@ with open("data/synthetic_batch.csv", "rb") as sf, open("data/ledger.csv", "rb")
             "settlement_file": ("synthetic_batch.csv", sf.read(), "text/csv"),
             "ledger_file": ("ledger.csv", lf.read(), "text/csv")
         },
-        data={"timestamp_tolerance_seconds": 2}
+        data={"timestamp_tolerance_seconds": 2, "confirm_overwrite": True}
     )
 upload_data = res_upload.json()
 batch_id = upload_data["batch_id"]

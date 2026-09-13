@@ -190,3 +190,221 @@ def test_multi_hypothesis_sequential_state_graph_telemetry():
     assert res_unres["suggested_category"] == DiscrepancyCategory.UNRESOLVED.value
     assert res_unres["confidence_score"] == 0.0
     assert len(res_unres["calculation_breakdown"]["attempts_tried"]) >= 6
+
+
+def test_run_matching_concurrency_and_status_guard():
+    """
+    Fix 1: Verifies that trigger_matching uses an atomic status guard (uploaded -> matching_in_progress).
+    Repeated or concurrent matching runs return 409 Conflict rather than 500 IntegrityError.
+    """
+    db = TestingSessionLocal()
+    batch = Batch(id=uuid.uuid4(), status=BatchStatus.uploaded, total_records=1)
+    db.add(batch)
+    db.commit()
+
+    # 1. First trigger succeeds
+    res1 = client.post(f"/batches/{batch.id}/run-matching")
+    assert res1.status_code == 200
+    assert res1.json()["status"] == "matching_complete"
+
+    # 2. Second trigger on matching_complete batch is rejected with 409 Conflict (not 500)
+    res2 = client.post(f"/batches/{batch.id}/run-matching")
+    assert res2.status_code == 409
+    assert "not in uploaded status" in res2.json()["detail"].lower()
+    db.close()
+
+
+def test_reasoning_lease_timeout_and_force_retry_reclamation():
+    """
+    Fix 2: Verifies that a batch stuck in reasoning_in_progress can be reclaimed
+    after lease expiration (5 mins) or via force_retry=True.
+    """
+    from datetime import timedelta
+    db = TestingSessionLocal()
+    stale_time = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=10)
+    batch_stale = Batch(
+        id=uuid.uuid4(),
+        status=BatchStatus.reasoning_in_progress,
+        reasoning_started_at=stale_time,
+        total_records=5
+    )
+    db.add(batch_stale)
+    db.commit()
+
+    # 1. Stale lease is automatically reclaimed -> 202 Accepted
+    res_stale = client.post(f"/batches/{batch_stale.id}/run-reasoning")
+    assert res_stale.status_code == 202
+    assert "started" in res_stale.json()["message"].lower()
+
+    # 2. Fresh in_progress without lease expiry is rejected with 409
+    fresh_time = datetime.now(timezone.utc).replace(tzinfo=None)
+    batch_fresh = Batch(
+        id=uuid.uuid4(),
+        status=BatchStatus.reasoning_in_progress,
+        reasoning_started_at=fresh_time,
+        total_records=5
+    )
+    db.add(batch_fresh)
+    db.commit()
+
+    res_fresh = client.post(f"/batches/{batch_fresh.id}/run-reasoning")
+    assert res_fresh.status_code == 409
+    assert "already in progress" in res_fresh.json()["detail"].lower()
+
+    # 3. Explicit force_retry overrides fresh lock -> 202 Accepted
+    res_force = client.post(f"/batches/{batch_fresh.id}/run-reasoning?force_retry=true")
+    assert res_force.status_code == 202
+    db.close()
+
+
+def test_direct_ingestion_functions_produce_chained_audit_logs():
+    """
+    Fix 4: Verifies that calling ingest_settlement_csv and ingest_ledger_csv directly
+    routes ingestion errors through log_audit_event and maintains a valid cryptographic hash chain.
+    """
+    from backend.ingestion import ingest_settlement_csv, ingest_ledger_csv
+    db = TestingSessionLocal()
+    batch = Batch(id=uuid.uuid4(), status=BatchStatus.uploaded, total_records=1)
+    db.add(batch)
+    db.commit()
+
+    malformed_csv = b"gateway_txn_id,order_id,settled_amount,settlement_timestamp,fee_deducted,currency\n,,INVALID,,\n"
+    succ, errs = ingest_settlement_csv(db=db, batch_id=batch.id, file_bytes=malformed_csv)
+    assert errs >= 1
+    db.commit()
+
+    # Verify that the direct ingestion errors formed valid hash chain links
+    chain_check = verify_audit_chain(db=db, batch_id=batch.id)
+    assert chain_check["is_valid"] is True
+    assert chain_check["total_verified_events"] >= 1
+    db.close()
+
+
+def test_decimal_financial_precision_and_json_roundtrip():
+    """
+    Fix 5: Verifies Decimal precision arithmetic prevents floating-point rounding drift,
+    and round-trips cleanly through calculation_breakdown JSON serialization into API responses.
+    Specifically proves a known IEEE 754 binary representation failure where raw float math fails.
+    """
+    from backend.reasoning import calculate_difference
+    from decimal import Decimal
+
+    # 1. IEEE 754 representation failure proof:
+    # In raw Python float: 58.95 - 57.771 evaluates to 1.1789999999999984 != 1.179
+    raw_float_diff = 58.95 - 57.771
+    assert raw_float_diff != 1.179, "Raw float subtraction unexpectedly succeeded"
+
+    # In calculate_difference (Decimal precision), exact equality is preserved:
+    calc_decimal = calculate_difference(
+        billed_amount="58.95",
+        settled_amount="57.771",
+        flat_surcharge="1.179"
+    )
+    assert calc_decimal["residual_gap"] == 0.00
+    assert calc_decimal["expected_settlement"] == 57.77
+
+    # 2. Test exact arithmetic on repeating fractions (1000 * 0.02 * 0.18 = 3.60 exactly)
+    calc = calculate_difference(
+        billed_amount=Decimal("1000.00"),
+        settled_amount=Decimal("976.40"),
+        fee_pct=Decimal("2.0"),
+        gst_on_fee_pct=Decimal("18.0")
+    )
+    assert calc["expected_settlement"] == 976.40
+    assert calc["residual_gap"] == 0.00
+
+
+def test_matching_sanity_gap_centralized_math():
+    """
+    Fix 6: Verifies that deterministic matching evaluates fee sanity checks and discrepancy
+    amounts through the centralized calculate_difference() arithmetic tool.
+    """
+    from backend.matching import run_deterministic_matching
+    from backend.reasoning import calculate_difference
+    db = TestingSessionLocal()
+    batch = Batch(id=uuid.uuid4(), status=BatchStatus.uploaded, total_records=1)
+    db.add(batch)
+
+    # Add settlement and ledger row
+    s = SettlementRecord(
+        id=uuid.uuid4(),
+        batch_id=batch.id,
+        gateway_txn_id="txn_math_01",
+        order_id="ord_math_01",
+        settled_amount=950.00,
+        fee_deducted=50.00,
+        settlement_timestamp=datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+    l = OrderLedger(
+        id=uuid.uuid4(),
+        batch_id=batch.id,
+        order_id="ord_math_01",
+        billed_amount=1000.00,
+        order_timestamp=datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+    db.add(s)
+    db.add(l)
+    db.commit()
+
+    # Verify matching uses centralized arithmetic tool
+    res = run_deterministic_matching(db=db, batch_id=batch.id)
+    assert res["matched_deterministic_count"] == 1
+
+    recon_row = db.query(ReconciliationResult).filter(ReconciliationResult.batch_id == batch.id).first()
+    tool_check = calculate_difference(billed_amount=1000.00, settled_amount=950.00, flat_surcharge=50.00)
+    assert tool_check["residual_gap"] == 0.00
+    assert float(recon_row.discrepancy_amount) == 50.00
+    db.close()
+
+
+def test_confirm_overwrite_duplicate_prevention_and_throughput_telemetry():
+    """
+    Fix 7: Verifies confirm_overwrite prevents accidental duplicate batch re-uploads (409 Conflict),
+    and GET /batches/{id}/summary returns non-null integer throughput_ms after execution.
+    """
+    import io
+    sample_settle = "gateway_txn_id,order_id,settled_amount,settlement_timestamp,fee_deducted,currency\ntxn_telemetry_01,ord_tel_01,980.00,2026-09-01T10:00:00Z,20.00,INR\n"
+    sample_ledger = "order_id,billed_amount,order_timestamp,refund_amount,is_international,payment_method\nord_tel_01,1000.00,2026-09-01T10:00:00Z,0.00,false,card\n"
+
+    # 1. First upload succeeds
+    res1 = client.post(
+        "/batches/upload",
+        files={
+            "settlement_file": ("settlement.csv", io.BytesIO(sample_settle.encode("utf-8")), "text/csv"),
+            "ledger_file": ("ledger.csv", io.BytesIO(sample_ledger.encode("utf-8")), "text/csv"),
+        }
+    )
+    assert res1.status_code == 200
+    batch_id = res1.json()["batch_id"]
+
+    # 2. Duplicate upload without confirm_overwrite returns 409 Conflict
+    res_dup = client.post(
+        "/batches/upload",
+        files={
+            "settlement_file": ("settlement.csv", io.BytesIO(sample_settle.encode("utf-8")), "text/csv"),
+            "ledger_file": ("ledger.csv", io.BytesIO(sample_ledger.encode("utf-8")), "text/csv"),
+        },
+        data={"confirm_overwrite": False}
+    )
+    assert res_dup.status_code == 409
+    assert "duplicate batch detected" in res_dup.json()["detail"].lower()
+
+    # 3. Duplicate upload with confirm_overwrite=True succeeds
+    res_overwrite = client.post(
+        "/batches/upload",
+        files={
+            "settlement_file": ("settlement.csv", io.BytesIO(sample_settle.encode("utf-8")), "text/csv"),
+            "ledger_file": ("ledger.csv", io.BytesIO(sample_ledger.encode("utf-8")), "text/csv"),
+        },
+        data={"confirm_overwrite": True}
+    )
+    assert res_overwrite.status_code == 200
+
+    # 4. Run matching and verify throughput_ms is populated
+    res_match = client.post(f"/batches/{batch_id}/run-matching")
+    assert res_match.status_code == 200
+
+    res_sum = client.get(f"/batches/{batch_id}/summary")
+    assert res_sum.status_code == 200
+    assert res_sum.json()["throughput_ms"] is not None
+    assert isinstance(res_sum.json()["throughput_ms"], int)

@@ -17,18 +17,20 @@ from tests.conftest import TestingSessionLocal
 client = TestClient(app)
 
 
+from decimal import Decimal
+
 def test_clean_currency_robustness():
-    """Verifies that clean_currency handles negative values, various symbols, and edge cases."""
-    assert clean_currency("₹1,200.50") == 1200.50
-    assert clean_currency("$49.00") == 49.00
-    assert clean_currency("€99.95") == 99.95
-    assert clean_currency("£150.00") == 150.00
-    assert clean_currency("-₹500.00") == -500.00
-    assert clean_currency("($250.00)") == -250.00
-    assert clean_currency(" - 100.50 ") == -100.50
-    assert clean_currency(None) == 0.0
-    assert clean_currency("") == 0.0
-    assert clean_currency(123.45) == 123.45
+    """Verifies that clean_currency handles negative values, various symbols, and edge cases with Decimal precision."""
+    assert clean_currency("₹1,200.50") == Decimal("1200.50")
+    assert clean_currency("$49.00") == Decimal("49.00")
+    assert clean_currency("€99.95") == Decimal("99.95")
+    assert clean_currency("£150.00") == Decimal("150.00")
+    assert clean_currency("-₹500.00") == Decimal("-500.00")
+    assert clean_currency("($250.00)") == Decimal("-250.00")
+    assert clean_currency(" - 100.50 ") == Decimal("-100.50")
+    assert clean_currency(None) == Decimal("0.00")
+    assert clean_currency("") == Decimal("0.00")
+    assert clean_currency(123.45) == Decimal("123.45")
 
 
 def test_audit_log_immutability_orm_guard(db_session: Session):

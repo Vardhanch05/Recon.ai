@@ -1,9 +1,9 @@
 {
   "total_records": 1000,
-  "ingestion_latency_ms": 224.97,
-  "matching_latency_ms": 202.63,
-  "reasoning_latency_ms": 25274.69,
-  "avg_reasoning_per_rec_ms": 126.37,
+  "ingestion_latency_ms": 191.75,
+  "matching_latency_ms": 178.89,
+  "reasoning_latency_ms": 29581.48,
+  "avg_reasoning_per_rec_ms": 147.91,
   "matched_deterministic_count": 800,
   "match_rate_deterministic_pct": 80.0,
   "matched_ai_resolved_count": 140,
@@ -20,13 +20,13 @@
     "false_positives": 0,
     "false_negatives": 0,
     "category_breakdown": {
-      "PARTIAL_REFUND": {
-        "total": 27,
-        "correct": 27
-      },
       "MDR_VARIANCE": {
         "total": 97,
         "correct": 97
+      },
+      "PARTIAL_REFUND": {
+        "total": 27,
+        "correct": 27
       },
       "UNRESOLVED": {
         "total": 60,
