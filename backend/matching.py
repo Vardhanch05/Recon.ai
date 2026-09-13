@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta
+import time
 from typing import Tuple, Dict, Any, List
 from sqlalchemy.orm import Session
-from sqlalchemy import func # SQLAlchemy SQL function helpers (e.g. func.abs for mathematical differences)
+from sqlalchemy import func
 import uuid
 
 try:
@@ -18,6 +19,7 @@ try:
         AuditEventType
     )
     from backend.audit import log_audit_event
+    from backend.reasoning import calculate_difference
 except ImportError:
     from models import (
         Batch,
@@ -32,6 +34,7 @@ except ImportError:
         AuditEventType
     )
     from audit import log_audit_event
+    from reasoning import calculate_difference
 
 
 # --- Deterministic Matching Engine (Rule-Based Pass ~80% Match Target) ---
@@ -39,7 +42,7 @@ def run_deterministic_matching(db: Session, batch_id: uuid.UUID) -> Dict[str, An
     """
     Executes Step 1 Deterministic Matching Engine on a batch:
     1. Primary Pass: order_id match (O(1) hash map lookup).
-       - If fee_deducted is present: runs a fee sanity check.
+       - If fee_deducted is present: runs a fee sanity check via calculate_difference().
        - If sanity check fails -> routes to 'amount_mismatch' exception for LLM reasoner.
     2. Fallback Pass: fee-adjusted amount + timestamp window.
        - Activated when order_id is missing/unmatched and fee_deducted IS NOT NULL.
@@ -48,9 +51,10 @@ def run_deterministic_matching(db: Session, batch_id: uuid.UUID) -> Dict[str, An
        - If multiple orders match the fallback, persists them in exception_candidates table.
     4. Idempotency & Batch Metrics:
        - Clears previous results if re-running.
-       - Updates batch status and match_rate_deterministic percentage.
+       - Updates batch status, duration_ms, and match_rate_deterministic percentage.
        - Writes an immutable 'match' event to audit_log.
     """
+    t0 = time.perf_counter()
 
     # 1. Fetch the target batch
     batch = db.query(Batch).filter(Batch.id == batch_id).first()
@@ -117,11 +121,16 @@ def run_deterministic_matching(db: Session, batch_id: uuid.UUID) -> Dict[str, An
             candidate = candidates[0]
             billed_amount = float(candidate.billed_amount)
 
-            # Sanity Check: If fee was deducted, does gross - fee = net?
+            # Sanity Check via central arithmetic tool: does billed - fee = settled?
             if fee_deducted is not None:
-                sanity_gap = abs(billed_amount - fee_deducted - settled_amount)
+                calc = calculate_difference(
+                    billed_amount=billed_amount,
+                    settled_amount=settled_amount,
+                    flat_surcharge=fee_deducted
+                )
+                sanity_gap = abs(calc["residual_gap"])
                 if sanity_gap >= 0.01:
-                    # Sanity gap failed -> Flag as exception, but link candidate order so AI can investigate
+                    # Sanity gap failed -> Flag as exception, link candidate order for reasoner
                     res = ReconciliationResult(
                         id=uuid.uuid4(),
                         batch_id=batch.id,
@@ -137,6 +146,7 @@ def run_deterministic_matching(db: Session, batch_id: uuid.UUID) -> Dict[str, An
                     continue
 
             # Deterministic Match Passed
+            diff_calc = calculate_difference(billed_amount=billed_amount, settled_amount=settled_amount)
             discrepancy = round(billed_amount - settled_amount, 2)
             res = ReconciliationResult(
                 id=uuid.uuid4(),
@@ -205,6 +215,8 @@ def run_deterministic_matching(db: Session, batch_id: uuid.UUID) -> Dict[str, An
     total_records = len(settlement_records)
     match_rate = round((matched_count / total_records * 100.0), 2) if total_records > 0 else 0.0
     
+    elapsed_ms = int((time.perf_counter() - t0) * 1000)
+    batch.duration_ms = (batch.duration_ms or 0) + elapsed_ms
     batch.status = BatchStatus.matching_complete
     batch.matched_deterministic_count = matched_count
     batch.match_rate_deterministic = match_rate

@@ -2,33 +2,38 @@ import csv
 import io
 import json
 import uuid
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from datetime import datetime
 from typing import List, Dict, Any, Tuple, Optional
 from sqlalchemy.orm import Session
 
 try:
     from backend.models import SettlementRecord, OrderLedger, AuditLog, AuditEventType
+    from backend.audit import log_audit_event
 except ImportError:
     from models import SettlementRecord, OrderLedger, AuditLog, AuditEventType
+    from audit import log_audit_event
 
 
 # ---------------------------------------------------------------------------
 # 1. Data Normalization Helpers
 # ---------------------------------------------------------------------------
 
-def clean_currency(val: Any) -> float:
-    """Standardizes currency strings to clean floats.
+def clean_currency(val: Any) -> Decimal:
+    """Standardizes currency strings to clean Decimal numbers.
     Handles symbols (₹, $, €, £, ¥, ₩), ISO codes, commas, accounting negatives
     (e.g., ($500)), and explicit negative signs.
     """
     if val is None:
-        return 0.0
+        return Decimal("0.00")
+    if isinstance(val, Decimal):
+        return val.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     if isinstance(val, (int, float)):
-        return float(val)
+        return Decimal(str(val)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     
     val_str = str(val).strip()
     if not val_str:
-        return 0.0
+        return Decimal("0.00")
     
     is_negative = False
     if val_str.startswith("(") and val_str.endswith(")"):
@@ -43,9 +48,13 @@ def clean_currency(val: Any) -> float:
     val_str = val_str.strip()
 
     if not val_str:
-        return 0.0
+        return Decimal("0.00")
 
-    parsed = float(val_str)
+    try:
+        parsed = Decimal(val_str).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except InvalidOperation:
+        raise ValueError(f"Invalid currency numeric format: {val}")
+
     return -parsed if is_negative else parsed
 
 
@@ -254,18 +263,18 @@ def ingest_settlement_csv(db: Session, batch_id: uuid.UUID, file_bytes: bytes) -
             success_count += 1
         except Exception as e:
             error_count += 1
-            audit_entry = AuditLog(
+            log_audit_event(
+                db=db,
                 batch_id=batch_id,
                 event_type=AuditEventType.ingestion_error,
                 actor="ingestion_service",
-                payload_json=json.dumps({
+                payload={
                     "file": "settlement",
                     "row_index": idx,
                     "raw_data": row,
                     "error": str(e),
-                }),
+                },
             )
-            db.add(audit_entry)
 
     db.flush()
     return success_count, error_count
@@ -291,7 +300,7 @@ def ingest_ledger_csv(db: Session, batch_id: uuid.UUID, file_bytes: bytes) -> Tu
             )
             # FIX A13: Explicit None/empty check for refund_amount
             raw_refund = row.get("refund_amount") if row.get("refund_amount") is not None else row.get("known_refund_amount")
-            refund_amount = clean_currency(raw_refund) if (raw_refund is not None and str(raw_refund).strip() != "") else 0.0
+            refund_amount = clean_currency(raw_refund) if (raw_refund is not None and str(raw_refund).strip() != "") else Decimal("0.00")
 
             raw_intl = row.get("is_international", "false")
             is_international = str(raw_intl).lower() in ("true", "1", "yes")
@@ -318,18 +327,18 @@ def ingest_ledger_csv(db: Session, batch_id: uuid.UUID, file_bytes: bytes) -> Tu
             success_count += 1
         except Exception as e:
             error_count += 1
-            audit_entry = AuditLog(
+            log_audit_event(
+                db=db,
                 batch_id=batch_id,
                 event_type=AuditEventType.ingestion_error,
                 actor="ingestion_service",
-                payload_json=json.dumps({
+                payload={
                     "file": "ledger",
                     "row_index": idx,
                     "raw_data": row,
                     "error": str(e),
-                }),
+                },
             )
-            db.add(audit_entry)
 
     db.flush()
     return success_count, error_count
