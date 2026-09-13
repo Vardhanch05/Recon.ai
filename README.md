@@ -13,7 +13,9 @@
 
 ## 🏗️ System Architecture
 
-![ReconAI Architecture](pics/ReconAI_arch.png)
+<p align="center">
+  <img src="pics/ReconAI_arch.png" alt="ReconAI Architecture" width="850" />
+</p>
 
 ### Core Architectural Layers:
 1. **Data Ingestion & Sanitization Layer**:
