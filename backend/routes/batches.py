@@ -8,9 +8,9 @@ import uuid
 
 from backend.database import get_db
 from backend.models import Batch, BatchStatus, SettlementRecord, OrderLedger, ReconciliationResult, ReconciliationStatus, AuditLog, AuditEventType
-from backend.schemas import UploadResponse, BatchSummaryResponse, AuditLogResponse, AuditLogItemOut
+from backend.schemas import UploadResponse, BatchSummaryResponse, AuditLogResponse, AuditLogItemOut, AuditVerifyResponse
 from backend.ingestion import parse_settlement_csv, parse_ledger_csv
-from backend.audit import log_audit_event
+from backend.audit import log_audit_event, verify_audit_chain
 from backend.security import verify_api_key
 
 router = APIRouter(prefix="/batches", tags=["Batches"])
@@ -157,6 +157,7 @@ def get_batch_summary(batch_id: uuid.UUID, db: Session = Depends(get_db)):
         ReconciliationResult.batch_id == batch_id,
         ReconciliationResult.status.in_([
             ReconciliationStatus.matched_ai_resolved,
+            ReconciliationStatus.pending_authorization,
             ReconciliationStatus.human_approved
         ])
     ).scalar() or 0
@@ -178,11 +179,32 @@ def get_batch_summary(batch_id: uuid.UUID, db: Session = Depends(get_db)):
         unresolved_count=unresolved,
         ingestion_error_count=batch.ingestion_error_count,
         match_rate_deterministic_pct=float(batch.match_rate_deterministic) if batch.match_rate_deterministic is not None else None,
-        # FIX H4: use the correct column name (match_rate_ai_resolved, not match_rate_ai_resolved_pct)
         match_rate_ai_resolved_pct=float(batch.match_rate_ai_resolved) if batch.match_rate_ai_resolved is not None else None,
-        # FIX H4: use duration_ms (actual DB column) instead of phantom throughput_ms attribute
         throughput_ms=batch.duration_ms if batch.duration_ms else None
     )
+
+
+@router.get("/audit-log/verify", response_model=AuditVerifyResponse)
+def verify_global_audit_log_chain(db: Session = Depends(get_db)):
+    """
+    Cryptographically verifies the global SHA-256 audit log chain.
+    Validates link continuity and recomputes hashes to detect in-place tampering.
+    """
+    result = verify_audit_chain(db=db)
+    return AuditVerifyResponse(**result)
+
+
+@router.get("/{batch_id}/audit-log/verify", response_model=AuditVerifyResponse)
+def verify_batch_audit_log_chain(batch_id: uuid.UUID, db: Session = Depends(get_db)):
+    """
+    Cryptographically verifies the audit log chain for a specific batch.
+    """
+    batch = db.query(Batch).filter(Batch.id == batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found")
+
+    result = verify_audit_chain(db=db, batch_id=batch_id)
+    return AuditVerifyResponse(**result)
 
 
 @router.get("/{batch_id}/audit-log", response_model=AuditLogResponse)
@@ -203,7 +225,7 @@ def get_batch_audit_log(
                 detail=f"Invalid event_type '{event_type}'. Valid values are: {[e.value for e in AuditEventType]}"
             )
     
-    events = query.order_by(AuditLog.timestamp.asc()).all()
+    events = query.order_by(AuditLog.sequence_num.asc()).all()
 
     parsed_events = []
     for e in events:
@@ -215,7 +237,10 @@ def get_batch_audit_log(
         parsed_events.append(AuditLogItemOut(
             id=e.id,
             batch_id=e.batch_id,
-            event_type=e.event_type.value,
+            sequence_num=e.sequence_num,
+            prev_hash=e.prev_hash,
+            current_hash=e.current_hash,
+            event_type=e.event_type.value if hasattr(e.event_type, "value") else str(e.event_type),
             actor=e.actor,
             payload_json=payload,
             timestamp=e.timestamp
@@ -225,4 +250,3 @@ def get_batch_audit_log(
         total=len(parsed_events),
         events=parsed_events
     )
-

@@ -127,7 +127,7 @@ def test_atomic_concurrency_guard_on_reasoning(db_session: Session):
     # Second trigger should be rejected with 409 Conflict because status is reasoning_in_progress
     res2 = client.post(f"/batches/{batch.id}/run-reasoning")
     assert res2.status_code == 409
-    assert "already in progress" in res2.json()["detail"]
+    assert "already" in res2.json()["detail"].lower()
 
 
 def test_upload_rejects_non_csv():

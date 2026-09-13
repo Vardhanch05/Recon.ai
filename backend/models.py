@@ -65,6 +65,7 @@ class BatchStatus(str, enum.Enum):
 class ReconciliationStatus(str, enum.Enum):
     matched_deterministic = "matched_deterministic"
     matched_ai_resolved = "matched_ai_resolved"
+    pending_authorization = "pending_authorization"
     exception_unresolved = "exception_unresolved"
     human_approved = "human_approved"
     human_rejected = "human_rejected"
@@ -101,6 +102,7 @@ class AuditEventType(str, enum.Enum):
     ingestion_error = "ingestion_error"
     match = "match"
     llm_call = "llm_call"
+    human_proposal = "human_proposal"
     human_approval = "human_approval"
     human_rejection = "human_rejection"
     journal_posted = "journal_posted"
@@ -179,6 +181,13 @@ class ReconciliationResult(Base):
     discrepancy_amount = Column(Numeric(18, 4), nullable=True)
     resolution_source = Column(SQLEnum(ResolutionSource), default=ResolutionSource.rule_engine, nullable=False)
     confidence_score = Column(Numeric(5, 4), nullable=True)
+    
+    # Maker-Checker Fields
+    requires_maker_checker = Column(Boolean, default=False)
+    proposed_by = Column(String, nullable=True)
+    proposed_at = Column(DateTime, nullable=True)
+    authorized_by = Column(String, nullable=True)
+    authorized_at = Column(DateTime, nullable=True)
     reviewed_at = Column(DateTime, nullable=True)
     reviewed_by = Column(String, nullable=True)
     created_at = Column(DateTime, default=get_utc_now)
@@ -222,20 +231,37 @@ class ReasoningCard(Base):
     reconciliation_result = relationship("ReconciliationResult", back_populates="reasoning_card")
 
 
+class AuditChainHead(Base):
+    """
+    Singleton table holding the latest cryptographic head hash and sequence number.
+    Row with id=1 is locked via FOR UPDATE in PostgreSQL / Lock in SQLite to serialize writes atomically.
+    """
+    __tablename__ = "audit_chain_head"
+
+    id = Column(Integer, primary_key=True, default=1)
+    current_hash = Column(String(64), nullable=False)
+    sequence_num = Column(Integer, default=0, nullable=False)
+    updated_at = Column(DateTime, default=get_utc_now, onupdate=get_utc_now)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
 
     id = Column(GUID, primary_key=True, default=uuid.uuid4)
     batch_id = Column(GUID, ForeignKey("batches.id", ondelete="SET NULL"), nullable=True)
+    sequence_num = Column(Integer, nullable=True, index=True)
+    prev_hash = Column(String(64), nullable=True)
+    current_hash = Column(String(64), nullable=True)
     event_type = Column(SQLEnum(AuditEventType), nullable=False)
     actor = Column(String, default="system", nullable=False)
-    payload_json = Column(Text, nullable=True)  # JSON string
+    payload_json = Column(Text, nullable=True)  # Canonical JSON string
     timestamp = Column(DateTime, default=get_utc_now, nullable=False)
 
     batch = relationship("Batch", back_populates="audit_logs")
 
     __table_args__ = (
         Index("idx_audit_batch_time", "batch_id", "timestamp"),
+        Index("idx_audit_sequence", "sequence_num"),
     )
 
 
@@ -245,12 +271,10 @@ def _prevent_audit_log_update(mapper, connection, target):
     from sqlalchemy import inspect
     state = inspect(target)
     for attr in state.attrs:
-        if attr.key in ("event_type", "actor", "payload_json", "timestamp") and attr.history.has_changes():
+        if attr.key in ("event_type", "actor", "payload_json", "timestamp", "sequence_num", "prev_hash", "current_hash") and attr.history.has_changes():
             raise ImmutableRecordError("AuditLog records are immutable and cannot be updated.")
 
 
 @event.listens_for(AuditLog, "before_delete")
 def _prevent_audit_log_delete(mapper, connection, target):
     raise ImmutableRecordError("AuditLog records are immutable and cannot be deleted.")
-
-

@@ -114,6 +114,9 @@ class ExceptionItemOut(BaseModel):
     discrepancy_amount: Optional[float] = None
     routing_reason: Optional[str] = None
     status: str
+    requires_maker_checker: Optional[bool] = False
+    proposed_by: Optional[str] = None
+    authorized_by: Optional[str] = None
     reasoning_card: Optional[ReasoningCardOut] = None
 
 
@@ -123,11 +126,11 @@ class ExceptionsListResponse(BaseModel):
 
 
 # ─────────────────────────────────────────────
-# APPROVAL & REJECTION SCHEMAS
+# APPROVAL, MAKER-CHECKER & REJECTION SCHEMAS
 # ─────────────────────────────────────────────
 
 class ApproveRequest(BaseModel):
-    reviewed_by: Optional[str] = "user_default"
+    reviewed_by: Optional[str] = "accountant_user"
 
 
 class ApproveResponse(BaseModel):
@@ -135,6 +138,34 @@ class ApproveResponse(BaseModel):
     status: str
     journal_posted: bool
     reviewed_at: datetime
+
+
+class ProposeRequest(BaseModel):
+    proposed_by: Optional[str] = "accountant_maker"
+    note: Optional[str] = None
+
+
+class ProposeResponse(BaseModel):
+    result_id: uuid.UUID
+    status: str
+    proposed_by: str
+    proposed_at: datetime
+    requires_maker_checker: bool
+    message: str
+
+
+class AuthorizeRequest(BaseModel):
+    authorized_by: Optional[str] = "controller_checker"
+    note: Optional[str] = None
+
+
+class AuthorizeResponse(BaseModel):
+    result_id: uuid.UUID
+    status: str
+    proposed_by: Optional[str]
+    authorized_by: str
+    journal_posted: bool
+    authorized_at: datetime
 
 
 class RejectRequest(BaseModel):
@@ -154,7 +185,10 @@ class RejectResponse(BaseModel):
 
 class AuditLogItemOut(BaseModel):
     id: uuid.UUID
-    batch_id: uuid.UUID
+    batch_id: Optional[uuid.UUID] = None
+    sequence_num: Optional[int] = None
+    prev_hash: Optional[str] = None
+    current_hash: Optional[str] = None
     event_type: str
     actor: str
     payload_json: Dict[str, Any]
@@ -164,6 +198,18 @@ class AuditLogItemOut(BaseModel):
 class AuditLogResponse(BaseModel):
     total: int
     events: List[AuditLogItemOut]
+
+
+class AuditVerifyResponse(BaseModel):
+    is_valid: bool
+    total_verified_events: int
+    batch_events_count: Optional[int] = None
+    latest_sequence: Optional[int] = None
+    head_hash: Optional[str] = None
+    broken_at_sequence: Optional[int] = None
+    broken_row_id: Optional[str] = None
+    reason: Optional[str] = None
+    message: str
 
 
 class AccuracyReportResponse(BaseModel):

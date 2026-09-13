@@ -10,6 +10,8 @@ os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 from backend.database import Base, get_db
 from backend.main import app
 import backend.models as models
+import backend.database as db_mod
+import backend.routes.reconciliation as recon_route
 
 # Test SQLite Engine in memory with static pool to share connection across threads
 test_engine = create_engine(
@@ -37,7 +39,7 @@ def db_session():
         db.close()
 
 @pytest.fixture(autouse=True)
-def override_get_db():
+def override_get_db(monkeypatch):
     def _override_get_db():
         db = TestingSessionLocal()
         try:
@@ -46,5 +48,7 @@ def override_get_db():
             db.close()
     
     app.dependency_overrides[get_db] = _override_get_db
+    monkeypatch.setattr(db_mod, "SessionLocal", TestingSessionLocal)
+    monkeypatch.setattr(recon_route, "SessionLocal", TestingSessionLocal)
     yield
     app.dependency_overrides.clear()

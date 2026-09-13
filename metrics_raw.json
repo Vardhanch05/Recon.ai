@@ -1,9 +1,9 @@
 {
   "total_records": 1000,
-  "ingestion_latency_ms": 183.51,
-  "matching_latency_ms": 135.59,
-  "reasoning_latency_ms": 33002.46,
-  "avg_reasoning_per_rec_ms": 165.01,
+  "ingestion_latency_ms": 224.97,
+  "matching_latency_ms": 202.63,
+  "reasoning_latency_ms": 25274.69,
+  "avg_reasoning_per_rec_ms": 126.37,
   "matched_deterministic_count": 800,
   "match_rate_deterministic_pct": 80.0,
   "matched_ai_resolved_count": 140,
@@ -20,6 +20,10 @@
     "false_positives": 0,
     "false_negatives": 0,
     "category_breakdown": {
+      "PARTIAL_REFUND": {
+        "total": 27,
+        "correct": 27
+      },
       "MDR_VARIANCE": {
         "total": 97,
         "correct": 97
@@ -31,10 +35,6 @@
       "FX_ROUNDING": {
         "total": 16,
         "correct": 16
-      },
-      "PARTIAL_REFUND": {
-        "total": 27,
-        "correct": 27
       }
     }
   },

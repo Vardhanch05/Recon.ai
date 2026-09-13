@@ -27,6 +27,10 @@ from backend.schemas import (
     ReasoningCardOut,
     ApproveRequest,
     ApproveResponse,
+    ProposeRequest,
+    ProposeResponse,
+    AuthorizeRequest,
+    AuthorizeResponse,
     RejectRequest,
     RejectResponse
 )
@@ -37,6 +41,8 @@ from backend.database import SessionLocal
 from backend.security import verify_api_key
 
 router = APIRouter(tags=["Reconciliation"])
+
+MAKER_CHECKER_THRESHOLD = 10000.0  # Variances > ₹10,000 require two-party authorization
 
 
 @router.post("/batches/{batch_id}/run-matching", response_model=MatchRunResponse)
@@ -70,7 +76,6 @@ async def trigger_reasoning(
     Triggers asynchronous LLM discrepancy reasoning pass on all exception records.
     Uses atomic conditional update to guarantee that duplicate concurrent requests cannot race.
     """
-    # Single atomic SQL update: transition only if status is matching_complete
     updated_rows = db.query(Batch).filter(
         Batch.id == batch_id,
         Batch.status == BatchStatus.matching_complete
@@ -124,6 +129,7 @@ def list_exceptions(
         ReconciliationResult.status.in_([
             ReconciliationStatus.exception_unresolved,
             ReconciliationStatus.matched_ai_resolved,
+            ReconciliationStatus.pending_authorization,
             ReconciliationStatus.human_approved,
             ReconciliationStatus.human_rejected
         ])
@@ -139,10 +145,8 @@ def list_exceptions(
                 detail=f"Invalid status filter '{status_filter}'."
             )
 
-    # FIX A5: Separate count query from joinedload data query to prevent inflated / incorrect count
     total = db.query(func.count(ReconciliationResult.id)).filter(*base_filter).scalar() or 0
 
-    # FIX H7: Eager-load all accessed relationships to eliminate N+1 queries per row
     results = db.query(ReconciliationResult).filter(*base_filter).options(
         joinedload(ReconciliationResult.settlement_record),
         joinedload(ReconciliationResult.order_ledger),
@@ -200,22 +204,161 @@ def list_exceptions(
                 hypothesis_text=card.hypothesis_text,
                 calculation_breakdown=breakdown,
                 confidence_score=float(card.confidence_score),
-                suggested_category=card.suggested_category,
+                suggested_category=card.suggested_category.value if hasattr(card.suggested_category, "value") else str(card.suggested_category),
                 requires_human_review=card.requires_human_review,
                 human_override_note=card.human_override_note
             )
+
+        disc_amt = float(r.discrepancy_amount) if r.discrepancy_amount is not None else 0.0
+        requires_mc = disc_amt > MAKER_CHECKER_THRESHOLD
 
         items.append(ExceptionItemOut(
             reconciliation_result_id=r.id,
             settlement_record=settle_out,
             candidate_orders=candidate_orders_out if candidate_orders_out else None,
-            discrepancy_amount=float(r.discrepancy_amount) if r.discrepancy_amount is not None else None,
+            discrepancy_amount=disc_amt,
             routing_reason=r.routing_reason.value if r.routing_reason else None,
             status=r.status.value,
+            requires_maker_checker=requires_mc or r.requires_maker_checker,
+            proposed_by=r.proposed_by,
+            authorized_by=r.authorized_by,
             reasoning_card=card_out
         ))
 
     return ExceptionsListResponse(total=total, items=items)
+
+
+@router.post("/reconciliation/{result_id}/propose", response_model=ProposeResponse)
+def propose_reconciliation(
+    result_id: uuid.UUID,
+    body: Optional[ProposeRequest] = None,
+    api_key: Optional[str] = Depends(verify_api_key),
+    db: Session = Depends(get_db)
+):
+    """
+    Maker Step: An accountant proposes resolution on an AI-resolved card.
+    Transitions status to 'pending_authorization' for two-party Maker-Checker review.
+    """
+    proposed_by = body.proposed_by if body and body.proposed_by else "accountant_maker"
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    rows_updated = db.query(ReconciliationResult).filter(
+        ReconciliationResult.id == result_id,
+        ReconciliationResult.status == ReconciliationStatus.matched_ai_resolved
+    ).update({
+        ReconciliationResult.status: ReconciliationStatus.pending_authorization,
+        ReconciliationResult.proposed_by: proposed_by,
+        ReconciliationResult.proposed_at: now,
+        ReconciliationResult.requires_maker_checker: True
+    }, synchronize_session="fetch")
+
+    if rows_updated == 0:
+        rec = db.query(ReconciliationResult).filter(ReconciliationResult.id == result_id).first()
+        if not rec:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reconciliation result not found")
+        if rec.status == ReconciliationStatus.pending_authorization:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This record is already proposed and pending authorization.")
+        if rec.status in (ReconciliationStatus.human_approved, ReconciliationStatus.human_rejected):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This record has already been actioned.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only AI-resolved records can be proposed.")
+
+    recon = db.query(ReconciliationResult).filter(ReconciliationResult.id == result_id).first()
+
+    log_audit_event(
+        db=db,
+        batch_id=recon.batch_id,
+        event_type=AuditEventType.human_proposal,
+        actor=proposed_by,
+        payload={"result_id": str(result_id), "action": "proposed", "note": body.note if body else None}
+    )
+
+    db.commit()
+
+    return ProposeResponse(
+        result_id=result_id,
+        status=ReconciliationStatus.pending_authorization.value,
+        proposed_by=proposed_by,
+        proposed_at=now,
+        requires_maker_checker=True,
+        message="Proposal recorded. Awaiting secondary controller authorization."
+    )
+
+
+@router.post("/reconciliation/{result_id}/authorize", response_model=AuthorizeResponse)
+def authorize_reconciliation(
+    result_id: uuid.UUID,
+    body: Optional[AuthorizeRequest] = None,
+    api_key: Optional[str] = Depends(verify_api_key),
+    db: Session = Depends(get_db)
+):
+    """
+    Checker Step: A secondary controller authorizes a proposed resolution.
+    Enforces strict segregation of duties: Maker cannot authorize their own proposal (403 Forbidden).
+    """
+    authorized_by = body.authorized_by if body and body.authorized_by else "controller_checker"
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    rec = db.query(ReconciliationResult).filter(ReconciliationResult.id == result_id).first()
+    if not rec:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reconciliation result not found")
+
+    if rec.status != ReconciliationStatus.pending_authorization:
+        if rec.status == ReconciliationStatus.human_approved:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This record has already been authorized.")
+        if rec.status == ReconciliationStatus.human_rejected:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This record has already been rejected.")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Record is not in pending_authorization status (current: {rec.status.value}). Propose resolution first."
+        )
+
+    # 403 Forbidden on self-authorization (Maker == Checker)
+    if rec.proposed_by and rec.proposed_by == authorized_by:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Maker-Checker violation: '{authorized_by}' proposed this resolution and cannot authorize their own proposal."
+        )
+
+    # Atomic update
+    rows_updated = db.query(ReconciliationResult).filter(
+        ReconciliationResult.id == result_id,
+        ReconciliationResult.status == ReconciliationStatus.pending_authorization
+    ).update({
+        ReconciliationResult.status: ReconciliationStatus.human_approved,
+        ReconciliationResult.authorized_by: authorized_by,
+        ReconciliationResult.authorized_at: now,
+        ReconciliationResult.reviewed_by: authorized_by,
+        ReconciliationResult.reviewed_at: now
+    }, synchronize_session="fetch")
+
+    if rows_updated == 0:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Concurrency conflict: record state changed during authorization.")
+
+    log_audit_event(
+        db=db,
+        batch_id=rec.batch_id,
+        event_type=AuditEventType.human_approval,
+        actor=authorized_by,
+        payload={"result_id": str(result_id), "action": "authorized", "proposed_by": rec.proposed_by}
+    )
+    log_audit_event(
+        db=db,
+        batch_id=rec.batch_id,
+        event_type=AuditEventType.journal_posted,
+        actor="system",
+        payload={"result_id": str(result_id), "status": "posted_to_ledger"}
+    )
+
+    db.commit()
+
+    return AuthorizeResponse(
+        result_id=result_id,
+        status=ReconciliationStatus.human_approved.value,
+        proposed_by=rec.proposed_by,
+        authorized_by=authorized_by,
+        journal_posted=True,
+        authorized_at=now
+    )
 
 
 @router.post("/reconciliation/{result_id}/approve", response_model=ApproveResponse)
@@ -226,14 +369,50 @@ def approve_reasoning_card(
     db: Session = Depends(get_db)
 ):
     """
-    Human approves an AI-resolved reasoning card.
-    Enforces strict atomic guard: status must be 'matched_ai_resolved'.
-    Prevents approving unexplained/unresolved cards.
+    Standard single-user approval for low-to-medium variance discrepancies (<= ₹10,000).
+    For high-value variances (> ₹10,000), initiates Maker-Checker proposal flow.
     """
     reviewed_by = body.reviewed_by if body and body.reviewed_by else "accountant_user"
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
-    # Atomic conditional update
+    rec = db.query(ReconciliationResult).filter(ReconciliationResult.id == result_id).first()
+    if not rec:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reconciliation result not found")
+
+    if rec.status == ReconciliationStatus.exception_unresolved:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unresolved exceptions cannot be approved to post funds. Only AI-resolved records can be approved."
+        )
+
+    if rec.status in (ReconciliationStatus.human_approved, ReconciliationStatus.human_rejected):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This record has already been actioned.")
+
+    # High-value variance requires Maker-Checker flow
+    disc_amount = float(rec.discrepancy_amount) if rec.discrepancy_amount is not None else 0.0
+    if disc_amount > MAKER_CHECKER_THRESHOLD:
+        # Move to pending_authorization
+        rec.status = ReconciliationStatus.pending_authorization
+        rec.proposed_by = reviewed_by
+        rec.proposed_at = now
+        rec.requires_maker_checker = True
+        
+        log_audit_event(
+            db=db,
+            batch_id=rec.batch_id,
+            event_type=AuditEventType.human_proposal,
+            actor=reviewed_by,
+            payload={"result_id": str(result_id), "action": "proposed", "threshold_exceeded": True}
+        )
+        db.commit()
+
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Discrepancy (₹{disc_amount:,.2f}) exceeds ₹{MAKER_CHECKER_THRESHOLD:,.2f} threshold. "
+                   f"Moved to 'pending_authorization'. Secondary controller must authorize via /authorize."
+        )
+
+    # Standard approval for <= threshold
     rows_updated = db.query(ReconciliationResult).filter(
         ReconciliationResult.id == result_id,
         ReconciliationResult.status == ReconciliationStatus.matched_ai_resolved
@@ -244,35 +423,18 @@ def approve_reasoning_card(
     }, synchronize_session="fetch")
 
     if rows_updated == 0:
-        # Check if record was already actioned or is unresolved
-        rec = db.query(ReconciliationResult).filter(ReconciliationResult.id == result_id).first()
-        if not rec:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reconciliation result not found")
-        if rec.status == ReconciliationStatus.human_approved:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This record has already been approved.")
-        if rec.status == ReconciliationStatus.human_rejected:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This record has already been rejected.")
-        if rec.status == ReconciliationStatus.exception_unresolved:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Unresolved exceptions cannot be approved to post funds. Only AI-resolved records can be approved."
-            )
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This record has already been actioned.")
 
-    # Fetch batch_id for audit logging
-    recon = db.query(ReconciliationResult).filter(ReconciliationResult.id == result_id).first()
-
-    # Log human_approval and journal_posted events
     log_audit_event(
         db=db,
-        batch_id=recon.batch_id,
+        batch_id=rec.batch_id,
         event_type=AuditEventType.human_approval,
         actor=reviewed_by,
         payload={"result_id": str(result_id), "action": "approved"}
     )
     log_audit_event(
         db=db,
-        batch_id=recon.batch_id,
+        batch_id=rec.batch_id,
         event_type=AuditEventType.journal_posted,
         actor="system",
         payload={"result_id": str(result_id), "status": "posted_to_ledger"}
@@ -297,7 +459,7 @@ def reject_reasoning_card(
 ):
     """
     Human rejects a reasoning card or routes an unresolved exception to manual review.
-    Atomic guard covers both 'matched_ai_resolved' and 'exception_unresolved'.
+    Atomic guard covers 'matched_ai_resolved', 'pending_authorization', and 'exception_unresolved'.
     """
     reviewed_by = body.reviewed_by if body and body.reviewed_by else "accountant_user"
     override_note = body.override_note if body else None
@@ -307,6 +469,7 @@ def reject_reasoning_card(
         ReconciliationResult.id == result_id,
         ReconciliationResult.status.in_([
             ReconciliationStatus.matched_ai_resolved,
+            ReconciliationStatus.pending_authorization,
             ReconciliationStatus.exception_unresolved
         ])
     ).update({
@@ -323,7 +486,6 @@ def reject_reasoning_card(
 
     recon = db.query(ReconciliationResult).filter(ReconciliationResult.id == result_id).first()
 
-    # If override note provided, save to reasoning_card
     if override_note and recon.reasoning_card:
         recon.reasoning_card.human_override_note = override_note
 
