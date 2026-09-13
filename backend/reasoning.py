@@ -1,9 +1,11 @@
 import json
 import uuid
 import os
+import time
 import logging
 import asyncio
-from typing import Dict, Any, Tuple, List, Optional
+from decimal import Decimal, ROUND_HALF_UP
+from typing import Dict, Any, Tuple, List, Optional, Union
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
@@ -28,7 +30,16 @@ logger = logging.getLogger(__name__)
 
 # --- 1. CORE CONFIDENCE & VALIDATION INVARIANTS ---
 
-def compute_confidence(residual_gap: float) -> Tuple[float, str]:
+def to_decimal(val: Any) -> Decimal:
+    """Safely converts any numeric / string value to a Decimal."""
+    if val is None:
+        return Decimal("0.00")
+    if isinstance(val, Decimal):
+        return val
+    return Decimal(str(val))
+
+
+def compute_confidence(residual_gap: Union[float, Decimal]) -> Tuple[float, str]:
     """
     Mathematical single source of truth for confidence scores.
     NEVER relies on self-reported LLM confidence to prevent hallucinated scores.
@@ -39,7 +50,7 @@ def compute_confidence(residual_gap: float) -> Tuple[float, str]:
       • gap <= 5.00:              Score 0.30 to 0.69 -> 'low_confidence'
       • gap > 5.00:               Score 0.00         -> 'unresolved'
     """
-    gap = abs(residual_gap)
+    gap = abs(float(residual_gap))
     if gap <= 0.05:
         return round(0.99 - (gap / 0.05) * 0.04, 2), "resolved"
     elif gap <= 0.50:
@@ -55,7 +66,7 @@ def validate_card(card: Dict[str, Any]) -> Dict[str, Any]:
     Server-side validation applied after LLM responds, before writing to DB.
     Guarantees that hallucinations or fabricated scores are overridden.
     """
-    gap = abs(card["calculation_breakdown"].get("residual_gap", 999.0))
+    gap = abs(float(card["calculation_breakdown"].get("residual_gap", 999.0)))
     computed_confidence, computed_status = compute_confidence(gap)
     
     # Overwrite card confidence with server-computed value
@@ -66,45 +77,50 @@ def validate_card(card: Dict[str, Any]) -> Dict[str, Any]:
     return card
 
 
-# --- 2. DETERMINISTIC MATH TOOL (Zero Hallucination Arithmetic) ---
+# --- 2. DETERMINISTIC MATH TOOL (Zero Hallucination Decimal Arithmetic) ---
 
 def calculate_difference(
-    billed_amount: float,
-    settled_amount: float,
-    fee_pct: float = 0.0,
-    gst_on_fee_pct: float = 0.0,
-    flat_surcharge: float = 0.0,
-    refund_amount: float = 0.0,
-    fx_adjustment: float = 0.0
+    billed_amount: Union[float, Decimal, str],
+    settled_amount: Union[float, Decimal, str],
+    fee_pct: Union[float, Decimal, str] = 0.0,
+    gst_on_fee_pct: Union[float, Decimal, str] = 0.0,
+    flat_surcharge: Union[float, Decimal, str] = 0.0,
+    refund_amount: Union[float, Decimal, str] = 0.0,
+    fx_adjustment: Union[float, Decimal, str] = 0.0
 ) -> Dict[str, Any]:
     """
-    Isolated deterministic arithmetic calculation tool.
+    Isolated deterministic arithmetic calculation tool using Decimal arithmetic.
     LLMs are prohibited from doing mental math; they must call this tool.
 
-    Formula:
-      fee = billed_amount * (fee_pct / 100)
+    Formula (Decimal precision):
+      fee = billed * (fee_pct / 100)
       gst = fee * (gst_on_fee_pct / 100)
       expected_settlement = billed - fee - gst - flat_surcharge - refund + fx_adjustment
       residual_gap = settled_amount - expected_settlement
     """
-    fee = billed_amount * (fee_pct / 100.0)
-    gst_on_fee = fee * (gst_on_fee_pct / 100.0)
-    expected_settlement = (
-        billed_amount - fee - gst_on_fee - flat_surcharge - refund_amount + fx_adjustment
-    )
+    billed_d = to_decimal(billed_amount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    settled_d = to_decimal(settled_amount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    fee_pct_d = to_decimal(fee_pct)
+    gst_pct_d = to_decimal(gst_on_fee_pct)
+    surcharge_d = to_decimal(flat_surcharge).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    refund_d = to_decimal(refund_amount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    fx_d = to_decimal(fx_adjustment).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-    residual_gap = round(settled_amount - expected_settlement, 2)
+    fee = (billed_d * (fee_pct_d / Decimal("100.0"))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    gst_on_fee = (fee * (gst_pct_d / Decimal("100.0"))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    expected_settlement = (billed_d - fee - gst_on_fee - surcharge_d - refund_d + fx_d).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    residual_gap = (settled_d - expected_settlement).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     return {
-        "billed_amount": round(billed_amount, 2),
-        "fee_pct_tested": round(fee_pct, 2),
-        "gst_on_fee_pct_tested": round(gst_on_fee_pct, 2),
-        "flat_surcharge_tested": round(flat_surcharge, 2),
-        "refund_amount_tested": round(refund_amount, 2),
-        "fx_adjustment_tested": round(fx_adjustment, 2),
-        "expected_settlement": round(expected_settlement, 2),
-        "actual_settlement": round(settled_amount, 2),
-        "residual_gap": residual_gap
+        "billed_amount": float(billed_d),
+        "fee_pct_tested": float(fee_pct_d),
+        "gst_on_fee_pct_tested": float(gst_pct_d),
+        "flat_surcharge_tested": float(surcharge_d),
+        "refund_amount_tested": float(refund_d),
+        "fx_adjustment_tested": float(fx_d),
+        "expected_settlement": float(expected_settlement),
+        "actual_settlement": float(settled_d),
+        "residual_gap": float(residual_gap)
     }
 
 
@@ -399,8 +415,10 @@ async def process_single_exception(
 async def run_batch_reasoning_pipeline(batch_id: uuid.UUID, db_session_factory) -> None:
     """
     Asynchronous background worker for processing all unresolved exceptions in a batch.
+    Commits per processed exception to release the global audit lock periodically.
     """
     db = db_session_factory()
+    t0 = time.perf_counter()
     try:
         batch = db.query(Batch).filter(Batch.id == batch_id).first()
         if not batch:
@@ -413,6 +431,8 @@ async def run_batch_reasoning_pipeline(batch_id: uuid.UUID, db_session_factory) 
         ).all()
 
         if not exceptions:
+            elapsed_ms = int((time.perf_counter() - t0) * 1000)
+            batch.duration_ms = (batch.duration_ms or 0) + elapsed_ms
             batch.status = BatchStatus.reasoning_complete
             db.commit()
             return
@@ -442,11 +462,12 @@ async def run_batch_reasoning_pipeline(batch_id: uuid.UUID, db_session_factory) 
 
             tasks.append((exc, settle_data, cand_order))
 
-        # Process exceptions sequentially or concurrently
+        # Process exceptions sequentially with chunked commits (every 10 records) to balance locking and I/O
         resolved_count = 0
         unresolved_count = 0
+        CHUNK_SIZE = 10
 
-        for exc, s_data, c_order in tasks:
+        for idx, (exc, s_data, c_order) in enumerate(tasks, start=1):
             card_dict, actor = await process_single_exception(exc.id, s_data, c_order, db)
 
             # Map category enum
@@ -505,15 +526,22 @@ async def run_batch_reasoning_pipeline(batch_id: uuid.UUID, db_session_factory) 
                 }
             )
 
+            # Heartbeat update and commit periodically every CHUNK_SIZE records
+            if idx % CHUNK_SIZE == 0 or idx == len(tasks):
+                batch.reasoning_started_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                db.commit()
+
         # Update batch summary
         batch.matched_ai_resolved_count = resolved_count
         batch.unresolved_count = unresolved_count
         if batch.total_records and batch.total_records > 0:
             batch.match_rate_ai_resolved = round((resolved_count / batch.total_records) * 100.0, 2)
 
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        batch.duration_ms = (batch.duration_ms or 0) + elapsed_ms
         batch.status = BatchStatus.reasoning_complete
         db.commit()
-        logger.info(f"Reasoning completed for batch {batch_id}: {resolved_count} resolved, {unresolved_count} unresolved.")
+        logger.info(f"Reasoning completed for batch {batch_id} in {elapsed_ms}ms: {resolved_count} resolved, {unresolved_count} unresolved.")
 
     except Exception as e:
         logger.error(f"Error in batch reasoning pipeline for {batch_id}: {e}", exc_info=True)
