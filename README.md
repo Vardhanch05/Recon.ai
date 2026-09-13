@@ -4,72 +4,45 @@
 [![React](https://img.shields.io/badge/React-19.0.0-61DAFB.svg?logo=react&logoColor=black)](https://reactjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-3178C6.svg?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14%2B-336791.svg?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
-[![Python Tests](https://img.shields.io/badge/Tests-12%2F12%20Passing-brightgreen.svg?logo=pytest&logoColor=white)](https://docs.pytest.org)
+[![Python Tests](https://img.shields.io/badge/Tests-21%2F21%20Passing-brightgreen.svg?logo=pytest&logoColor=white)](https://docs.pytest.org)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-> An enterprise-grade AI settlement reconciliation system built for payment gateway merchants. Combines deterministic rule matching, function-calling LLM discrepancy reasoning, mathematically bounded confidence scoring, and atomic human approval gates.
-
----
-
-## 🌟 Key Highlights & Resume Talking Points
-
-- **Hybrid Deterministic + AI Pipeline**:
-  - Automatically matches **~80% of transaction records deterministically** in sub-second execution (zero AI token cost).
-  - Routes remaining **~14% of discrepancy exceptions** to an LLM reasoning engine that hypothesizes fee structures (Domestic/International MDR, GST on fees, partial refunds, gateway flat surcharges).
-  - Honestly flags **~6% of genuine anomalies** as `UNRESOLVED` rather than hallucinating force-fitted explanations.
-- **Tool-Calling Arithmetic Integrity**:
-  - Strictly prohibits free-text math hallucinations. The LLM invokes a server-side Python tool (`calculate_difference`) to calculate exact expected settlements and residual gaps.
-- **Defensible Mathematical Confidence**:
-  - Confidence scores are never self-reported by the LLM. They are derived purely on the server from the residual gap ($\le ₹0.05 \rightarrow 0.99$, $\le ₹0.50 \rightarrow 0.94 - 0.70$, $> ₹5.00 \rightarrow 0.00$).
-- **Atomic Human Approval Hard-Gate**:
-  - Nothing posts to the financial ledger without explicit human approval.
-  - Implements atomic SQL conditional updates (`WHERE status = 'matched_ai_resolved'`) to eliminate double-action / concurrency race conditions (HTTP 409 Conflict).
-- **Append-Only Immutable Audit Trail**:
-  - Every pipeline event (`ingestion_error`, `match`, `llm_call`, `human_approval`, `human_rejection`, `journal_posted`) is logged immutably. ORM lifecycle event listeners block any `UPDATE` or `DELETE` operations on the audit table.
-- **Live Verifiable Accuracy Reporting**:
-  - Live confusion matrix endpoint (`/batches/{id}/accuracy-report`) evaluates predictions against a pre-built ground-truth dataset (`data/ground_truth.csv`), demonstrating **100% accuracy** on explainable and unresolvable test sets.
+> A multi-source settlement reconciliation platform built for payment gateway merchants. Combines deterministic rule matching, function-calling LLM discrepancy reasoning with isolated server-side arithmetic, dual-control Maker-Checker governance, and a cryptographically chained immutable audit log.
 
 ---
 
 ## 🏗️ System Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                             React 19 Frontend                               │
-│  [Header] → [PipelineStepper] → [UploadPanel] → [MatchRateSummaryCard]      │
-│  [ExceptionList] ───► [ReasoningCard] (Math Breakdown & Approval Gate)      │
-│  [AuditLogViewer] & [AccuracyReportModal] (Live Confusion Matrix)           │
-└──────────────────────────────────────┬──────────────────────────────────────┘
-                                       │ HTTP / REST
-┌──────────────────────────────────────▼──────────────────────────────────────┐
-│                              FastAPI Backend                                │
-│  ┌─────────────────────────┐  ┌───────────────────────┐  ┌────────────────┐ │
-│  │   Batches Router        │  │ Reconciliation Router │  │ Reports Router │ │
-│  │ (/batches/upload,       │  │ (/run-matching,       │  │ (/accuracy-    │ │
-│  │  /summary, /audit-log)  │  │  /run-reasoning,      │  │   report)      │ │
-│  │                         │  │  /approve, /reject)   │  │                │ │
-│  └────────────┬────────────┘  └───────────┬───────────┘  └───────┬────────┘ │
-│               │                           │                      │          │
-│  ┌────────────▼───────────────────────────▼──────────────────────▼────────┐ │
-│  │                 Ingestion, Matching & Reasoning Services               │ │
-│  │  • Deterministic Matching Engine (80% auto-match rate)                 │ │
-│  │  • Parallel LLM Reasoner with tool-calling verification                │ │
-│  │  • Immutable Audit Logger (Lifecycle ORM Event Listeners)              │ │
-│  └────────────────────────────────────┬───────────────────────────────────┘ │
-└───────────────────────────────────────┼─────────────────────────────────────┘
-                                        │
-┌───────────────────────────────────────▼─────────────────────────────────────┐
-│                   Database Layer (PostgreSQL / SQLite)                      │
-│  batches | settlement_records | order_ledger | reconciliation_results       │
-│  exception_candidates | reasoning_cards | audit_log                         │
-└───────────────────────────────────────┬─────────────────────────────────────┘
-                                        │
-                         ┌──────────────▼──────────────┐
-                         │   LLM Provider (Groq/OpenAI)│
-                         │   + calculate_difference    │
-                         │     Deterministic Tool      │
-                         └─────────────────────────────┘
-```
+![ReconAI Architecture](pics/ReconAI_arch.png)
+
+### Core Architectural Layers:
+1. **Data Ingestion & Sanitization Layer**:
+   - Parses multi-part settlement and merchant ledger CSV exports.
+   - Enforces exact currency normalization using quantized `Decimal("0.01")` arithmetic to eliminate floating-point precision drift.
+   - Prevents duplicate batch ingestion via idempotency checks (`confirm_overwrite`).
+
+2. **Deterministic Matching Engine (Pass 1)**:
+   - Indexes and matches transactions via exact Order ID lookup and multi-key fallback joins (Reference ID + timestamp window).
+   - Resolves majority of transaction volume in sub-second execution at zero LLM inference cost.
+   - Protected by single-state atomic guards (`WHERE status = 'uploaded'`) returning `HTTP 409 Conflict` on concurrent execution attempts.
+
+3. **AI Discrepancy Reasoning Engine (Pass 2)**:
+   - Asynchronously analyzes unmatched exceptions across multiple financial hypotheses (MDR variance, GST rates, partial refunds, flat surcharges, and FX adjustments).
+   - Eliminates math hallucinations by delegating all calculations to an isolated server-side `calculate_difference()` tool.
+   - Derives objective confidence scores from server-computed residual gaps.
+   - Employs a 5-minute lease timeout with auto-reclamation and commit chunking (`CHUNK_SIZE = 10`) to balance throughput with crash-recovery granularity.
+
+4. **Dual-Control Governance & Journal Posting**:
+   - Enforces Segregation of Duties (Maker-Checker) before any discrepancy can post to the financial ledger.
+   - Identity check evaluated before state check returns `HTTP 403 Forbidden` on self-authorization attempts.
+   - Prevents double-action race conditions via atomic SQL conditional updates (`WHERE status = 'pending_authorization'`).
+
+5. **Cryptographic Forward-Linked Audit Trail**:
+   - Logs every lifecycle event (`ingestion_completed`, `matching_completed`, `reasoning_card_generated`, `settlement_approved`, `settlement_rejected`).
+   - Implements forward SHA-256 hash chaining (`current_hash = SHA256(prev_hash + payload)`).
+   - Serialized append operations via singleton `AuditChainHead` row-level lock.
+   - ORM lifecycle event listeners block `UPDATE` and `DELETE` mutations.
+   - Provides an automated verification endpoint (`GET /batches/{id}/audit-log/verify`) for continuous tamper detection.
 
 ---
 
@@ -111,24 +84,22 @@ docker-compose up --build
 
 ---
 
-## 📊 End-to-End Demo Walkthrough
+## 📊 End-to-End Walkthrough
 
 1. **Upload Datasets**:
    - Drag & drop `data/synthetic_batch.csv` (Razorpay settlement export) and `data/ledger.csv` (Merchant order ledger).
    - Click **"Upload & Ingest Batch"**.
 2. **Run Deterministic Matching**:
    - Click **"Run Matching"**.
-   - Watch **44 of 55 records (80%)** match instantly with zero LLM tokens spent.
+   - Matches records deterministically with zero LLM tokens spent.
 3. **Run AI Discrepancy Reasoning**:
    - Click **"Run AI Reasoning"**.
-   - Background worker invokes parallel function-calling to analyze the 11 exceptions.
-   - Explains 7 discrepancies and accurately flags 3 anomalies as `UNRESOLVED`.
-4. **Review & Approve**:
-   - Inspect reasoning cards, expand the calculation breakdown drawer to verify arithmetic.
-   - Click **Approve** on AI-resolved records to post journal entries.
-5. **Inspect Audit Trail & Accuracy**:
-   - View the immutable audit log recording every timestamped event.
-   - Open **"Accuracy Report"** to inspect the live confusion matrix.
+   - Background worker invokes tool-calling reasoning to analyze exceptions, explain valid variances, and flag unresolvable anomalies.
+4. **Dual-Control Review & Approval**:
+   - Inspect reasoning cards and calculation breakdowns.
+   - Propose resolution as Maker and authorize as Checker to post verified ledger entries.
+5. **Inspect & Verify Audit Trail**:
+   - View the immutable audit log and trigger cryptographic hash chain validation to verify tamper resistance.
 
 ---
 
@@ -139,12 +110,13 @@ Run the full pytest suite:
 pytest -v
 ```
 
-### Test Coverage Highlights:
-- `test_models.py`: Cross-dialect GUID, relationships, cascade rules, unique constraints.
-- `test_ingestion.py`: CSV parsing, currency cleaning, row errors, summary metrics.
-- `test_matching.py`: Order ID matching, fallback matching, 409 concurrency protection on approvals.
-- `test_full_pipeline.py`: Complete end-to-end pipeline run matching ground truth.
-- `test_audit_remediation.py`: Immutability ORM hooks, audit retention on batch delete, reasoning state guards.
+### Test Coverage Highlights (21 Passed Tests):
+- `tests/test_tier1_features.py`: Cryptographic hash chain verification, Maker-Checker dual control & 403 self-authorization guard, atomic status guards, lease timeout reclamation, Decimal precision regressions, and throughput telemetry.
+- `tests/test_audit_remediation.py`: Immutability ORM hooks, audit retention on batch delete, and reasoning concurrency guards.
+- `tests/test_models.py`: Cross-dialect GUID, relationships, cascade rules, and unique constraints.
+- `tests/test_ingestion.py`: CSV parsing, currency normalization, row validation, and summary metrics.
+- `tests/test_matching.py`: Order ID matching, fallback joins, and centralized math sanity checks.
+- `tests/test_full_pipeline.py`: Complete end-to-end multi-source reconciliation pipeline execution.
 
 ---
 
@@ -159,48 +131,36 @@ ReconAI/
 │   ├── models.py            # Declarative database models with immutability hooks
 │   ├── schemas.py           # Pydantic v2 validation & response schemas
 │   ├── ingestion.py         # CSV parsing, currency cleaning, and row validation
-│   ├── matching.py          # Two-pass deterministic matching engine
+│   ├── matching.py          # Deterministic matching engine with centralized math
 │   ├── reasoning.py         # LLM discrepancy reasoner with calculate_difference tool
-│   ├── audit.py             # Audit event emitter
-│   ├── security.py          # Optional API key authentication dependency
+│   ├── audit.py             # Cryptographic hash chain audit logger
+│   ├── security.py          # API key authentication dependency
 │   ├── logging_config.py    # Structured logging configuration
 │   └── routes/
 │       ├── batches.py       # Upload, batch summary, and audit log endpoints
-│       ├── reconciliation.py # Matching, async reasoning, approval & rejection
-│       └── reports.py       # Ground-truth accuracy evaluation & confusion matrix
+│       ├── reconciliation.py # Matching, async reasoning, approval & authorization
+│       └── reports.py       # Accuracy evaluation & confusion matrix
 ├── frontend/
 │   ├── src/
 │   │   ├── components/
 │   │   │   ├── Header.tsx               # App bar with quick actions & status pill
 │   │   │   ├── PipelineStepper.tsx      # 4-stage interactive pipeline progress
 │   │   │   ├── UploadPanel.tsx          # Dual dropzone file upload interface
-│   │   │   ├── MatchRateSummaryCard.tsx # 80% / 14% / 6% KPI stat cards
+│   │   │   ├── MatchRateSummaryCard.tsx # Match rate & exception KPI stat cards
 │   │   │   ├── ExceptionList.tsx        # Filterable reasoning cards container
-│   │   │   ├── ReasoningCard.tsx        # Discrepancy explanation & math table
-│   │   │   ├── AuditLogViewer.tsx       # Immutable audit log stream with filter
-│   │   │   └── AccuracyReportModal.tsx  # Live confusion matrix modal
+│   │   │   ├── ReasoningCard.tsx        # Discrepancy explanation & math drawer
+│   │   │   ├── AuditLogViewer.tsx       # Immutable audit log stream with verify action
+│   │   │   └── AccuracyReportModal.tsx  # Confusion matrix modal
 │   │   ├── App.tsx          # Main application orchestration
 │   │   └── api.ts           # Axios / Fetch client layer
 ├── data/
-│   ├── synthetic_batch.csv  # 55-record synthetic settlement file
+│   ├── synthetic_batch.csv  # Synthetic settlement file
 │   ├── ledger.csv           # Matching merchant order ledger
-│   └── ground_truth.csv     # Independent evaluation answer key
-├── docs/                    # Technical specs (PRD, TRD, Schema, App Flow, UI Brief)
-├── tests/                   # 12 automated Pytest test suites
+│   └── ground_truth.csv     # Independent evaluation dataset
+├── pics/                    # Architecture diagrams (PNG, SVG)
+├── docs/                    # Technical specifications (PRD, TRD, Schema, App Flow)
+├── tests/                   # 21 automated Pytest test suites
 ├── Dockerfile               # Production container image
 ├── docker-compose.yml       # Multi-container orchestration
 └── README.md                # Project documentation
 ```
-
----
-
-## 💼 Resume Description Template
-
-> **Recon.ai | AI Financial Settlement Reconciliation Engine**  
-> *FastAPI, React 19, TypeScript, Python, SQLAlchemy, PostgreSQL, Groq/OpenAI, Docker, Pytest*  
-> - Designed and built an enterprise-grade settlement reconciliation system processing payment gateway settlement batches against internal merchant ledgers.  
-> - Developed a two-stage pipeline combining a deterministic matching engine (auto-reconciling 80% of transactions in <200ms) with an asynchronous LLM reasoning agent explaining complex fee and refund discrepancies.  
-> - Integrated tool-calling with a deterministic Python math engine (`calculate_difference`) and mathematical residual-gap confidence scoring, eliminating free-text arithmetic hallucinations.  
-> - Implemented atomic conditional SQL state guards preventing race conditions (HTTP 409) and built an append-only audit trail with ORM-level immutability hooks.  
-> - Built a responsive React 19 + TypeScript dashboard with live pipeline progression, expandable calculation breakdowns, and a verifiable ground-truth accuracy reporting modal (100% precision on synthetic benchmarks).  
-> - Authored 12 automated unit and integration test suites with Pytest achieving 100% test pass rate.
