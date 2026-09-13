@@ -1,9 +1,9 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, status
 from sqlalchemy.orm import Session, joinedload, selectinload
-from sqlalchemy import func
+from sqlalchemy import func, or_, and_
 import uuid
 
 from backend.database import get_db
@@ -51,10 +51,40 @@ def trigger_matching(
     api_key: Optional[str] = Depends(verify_api_key),
     db: Session = Depends(get_db)
 ):
-    """Triggers synchronous deterministic matching engine pass."""
-    batch = db.query(Batch).filter(Batch.id == batch_id).first()
-    if not batch:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found")
+    """
+    Triggers synchronous deterministic matching engine pass.
+    Uses atomic conditional update to guarantee that duplicate concurrent requests cannot race.
+    """
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    updated_rows = db.query(Batch).filter(
+        Batch.id == batch_id,
+        Batch.status == BatchStatus.uploaded
+    ).update({
+        Batch.status: BatchStatus.matching_in_progress,
+        Batch.matching_started_at: now
+    }, synchronize_session="fetch")
+    db.commit()
+
+    if updated_rows == 0:
+        batch = db.query(Batch).filter(Batch.id == batch_id).first()
+        if not batch:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Batch not found")
+        if batch.status == BatchStatus.matching_in_progress:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Matching is already in progress for this batch.")
+        if batch.status in (
+            BatchStatus.matching_complete,
+            BatchStatus.reasoning_in_progress,
+            BatchStatus.reasoning_complete,
+            BatchStatus.approved
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Batch is not in uploaded status (current: {batch.status.value})."
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot run matching on batch with status {batch.status.value}."
+        )
 
     try:
         result = run_deterministic_matching(db=db, batch_id=batch_id)
@@ -69,19 +99,38 @@ def trigger_matching(
 async def trigger_reasoning(
     batch_id: uuid.UUID,
     background_tasks: BackgroundTasks,
+    force_retry: bool = Query(False, description="Force retry even if previously marked in_progress or complete"),
     api_key: Optional[str] = Depends(verify_api_key),
     db: Session = Depends(get_db)
 ):
     """
     Triggers asynchronous LLM discrepancy reasoning pass on all exception records.
-    Uses atomic conditional update to guarantee that duplicate concurrent requests cannot race.
+    Uses atomic conditional update with a 5-minute lease timeout to allow reclaiming crashed jobs.
     """
-    updated_rows = db.query(Batch).filter(
-        Batch.id == batch_id,
-        Batch.status == BatchStatus.matching_complete
-    ).update({
-        Batch.status: BatchStatus.reasoning_in_progress
-    }, synchronize_session="fetch")
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    stale_cutoff = now - timedelta(minutes=5)
+
+    if force_retry:
+        updated_rows = db.query(Batch).filter(
+            Batch.id == batch_id
+        ).update({
+            Batch.status: BatchStatus.reasoning_in_progress,
+            Batch.reasoning_started_at: now
+        }, synchronize_session="fetch")
+    else:
+        updated_rows = db.query(Batch).filter(
+            Batch.id == batch_id,
+            or_(
+                Batch.status == BatchStatus.matching_complete,
+                and_(
+                    Batch.status == BatchStatus.reasoning_in_progress,
+                    or_(Batch.reasoning_started_at == None, Batch.reasoning_started_at < stale_cutoff)
+                )
+            )
+        ).update({
+            Batch.status: BatchStatus.reasoning_in_progress,
+            Batch.reasoning_started_at: now
+        }, synchronize_session="fetch")
     db.commit()
 
     if updated_rows == 0:
@@ -302,6 +351,14 @@ def authorize_reconciliation(
     if not rec:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reconciliation result not found")
 
+    # 1. Maker-Checker Identity Guard: 403 Forbidden on self-authorization (Maker == Checker)
+    if rec.proposed_by and rec.proposed_by == authorized_by:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Maker-Checker violation: '{authorized_by}' proposed this resolution and cannot authorize their own proposal."
+        )
+
+    # 2. Lifecycle State Guard: 409 Conflict if not in pending_authorization
     if rec.status != ReconciliationStatus.pending_authorization:
         if rec.status == ReconciliationStatus.human_approved:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This record has already been authorized.")
@@ -310,13 +367,6 @@ def authorize_reconciliation(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Record is not in pending_authorization status (current: {rec.status.value}). Propose resolution first."
-        )
-
-    # 403 Forbidden on self-authorization (Maker == Checker)
-    if rec.proposed_by and rec.proposed_by == authorized_by:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Maker-Checker violation: '{authorized_by}' proposed this resolution and cannot authorize their own proposal."
         )
 
     # Atomic update

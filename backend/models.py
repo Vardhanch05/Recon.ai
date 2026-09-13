@@ -123,6 +123,8 @@ class Batch(Base):
     unresolved_count = Column(Integer, default=0)
     timestamp_tolerance_seconds = Column(Integer, default=2)
     duration_ms = Column(Integer, default=0)
+    matching_started_at = Column(DateTime, nullable=True)
+    reasoning_started_at = Column(DateTime, nullable=True)
 
     # Relationships
     settlements = relationship("SettlementRecord", back_populates="batch", cascade="all, delete-orphan")
