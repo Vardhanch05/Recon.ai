@@ -52,3 +52,7 @@ frontend/build/
 *.swo
 .DS_Store
 Thumbs.db
+
+# Archive & Local Scratch
+archive/
+trash/
