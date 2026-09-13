@@ -297,7 +297,90 @@ Evaluates AI reasoning card predictions against ground-truth answer key.
 
 ---
 
-### 10. Health Check
+---
+
+### 10. Maker-Checker Propose Resolution
+`POST /reconciliation/{result_id}/propose`
+
+Maker step: An accountant proposes resolution on an AI-resolved discrepancy, transitioning status to `pending_authorization`.
+
+**Request Body** (optional):
+```json
+{
+  "proposed_by": "alice_maker",
+  "note": "MDR rate verified against merchant agreement tier 2."
+}
+```
+
+**Response 200 OK**:
+```json
+{
+  "result_id": "8a72b0c1-2f3b-4c5e-9a1d-7b2c3d4e5f6a",
+  "status": "pending_authorization",
+  "proposed_by": "alice_maker",
+  "proposed_at": "2024-03-01T10:05:00",
+  "requires_maker_checker": true,
+  "message": "Proposal recorded. Awaiting secondary controller authorization."
+}
+```
+
+**Errors**:
+- `404 Not Found`: Record not found.
+- `409 Conflict`: Record is already proposed or actioned.
+- `400 Bad Request`: Only AI-resolved records can be proposed.
+
+---
+
+### 11. Maker-Checker Authorize Resolution
+`POST /reconciliation/{result_id}/authorize`
+
+Checker step: Secondary controller authorizes a proposed resolution and triggers journal posting. Enforces segregation of duties (`403 Forbidden` if Maker == Checker).
+
+**Request Body** (optional):
+```json
+{
+  "authorized_by": "bob_controller"
+}
+```
+
+**Response 200 OK**:
+```json
+{
+  "result_id": "8a72b0c1-2f3b-4c5e-9a1d-7b2c3d4e5f6a",
+  "status": "human_approved",
+  "proposed_by": "alice_maker",
+  "authorized_by": "bob_controller",
+  "journal_posted": true,
+  "authorized_at": "2024-03-01T10:10:00"
+}
+```
+
+**Errors**:
+- `403 Forbidden`: Self-authorization attempt (Maker attempted to authorize their own proposal).
+- `409 Conflict`: Record is not in `pending_authorization` status or already authorized/rejected.
+
+---
+
+### 12. Verify Cryptographic Audit Chain
+`GET /batches/audit-log/verify` or `GET /batches/{batch_id}/audit-log/verify`
+
+Cryptographically validates SHA-256 hash continuity and verifies all payload hashes from sequence 1 to N to detect any in-place record tampering.
+
+**Response 200 OK**:
+```json
+{
+  "is_valid": true,
+  "total_verified_events": 150,
+  "batch_events_count": 55,
+  "latest_sequence": 150,
+  "head_hash": "a1b2c3d4e5f6...",
+  "message": "Audit chain is cryptographically intact and unbroken."
+}
+```
+
+---
+
+### 13. Health Check
 `GET /health`
 
 Verifies server status and database connectivity.

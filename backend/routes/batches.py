@@ -76,6 +76,18 @@ async def upload_batch(
         seen_gateway_txns.add(row["gateway_txn_id"])
         settlement_records_to_insert.append(row)
 
+    # Check for duplicate batch if confirm_overwrite is False
+    if not confirm_overwrite and seen_gateway_txns:
+        sample_txns = list(seen_gateway_txns)[:100]
+        existing_duplicate = db.query(SettlementRecord.gateway_txn_id).filter(
+            SettlementRecord.gateway_txn_id.in_(sample_txns)
+        ).first()
+        if existing_duplicate:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Duplicate batch detected: transactions already exist in the database. Set confirm_overwrite=true to re-upload."
+            )
+
     # Create Batch record directly with final deduplicated count
     batch = Batch(
         id=uuid.uuid4(),
