@@ -1,0 +1,42 @@
+{
+  "total_records": 1000,
+  "ingestion_latency_ms": 191.75,
+  "matching_latency_ms": 178.89,
+  "reasoning_latency_ms": 29581.48,
+  "avg_reasoning_per_rec_ms": 147.91,
+  "matched_deterministic_count": 800,
+  "match_rate_deterministic_pct": 80.0,
+  "matched_ai_resolved_count": 140,
+  "match_rate_ai_resolved_pct": 14.0,
+  "unresolved_count": 60,
+  "unresolved_pct": 6.0,
+  "total_coverage_pct": 94.0,
+  "explainable_accuracy_pct": 100.0,
+  "unresolvable_accuracy_pct": 100.0,
+  "overall_accuracy_pct": 100.0,
+  "confusion_matrix": {
+    "true_positives_explainable": 140,
+    "true_negatives_unresolvable": 60,
+    "false_positives": 0,
+    "false_negatives": 0,
+    "category_breakdown": {
+      "MDR_VARIANCE": {
+        "total": 97,
+        "correct": 97
+      },
+      "PARTIAL_REFUND": {
+        "total": 27,
+        "correct": 27
+      },
+      "UNRESOLVED": {
+        "total": 60,
+        "correct": 60
+      },
+      "FX_ROUNDING": {
+        "total": 16,
+        "correct": 16
+      }
+    }
+  },
+  "audit_events_count": 201
+}

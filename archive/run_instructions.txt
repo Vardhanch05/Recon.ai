@@ -1,0 +1,89 @@
+================================================================================
+  Recon.ai — Multi-Source Settlement Reconciler
+  Run & Setup Instructions
+================================================================================
+
+1. PREREQUISITES
+--------------------------------------------------------------------------------
+- Python 3.10+ (tested with Python 3.11/3.14)
+- Node.js 18+ and npm
+- PostgreSQL (or SQLite for local testing)
+
+--------------------------------------------------------------------------------
+2. BACKEND SETUP & RUNNING
+--------------------------------------------------------------------------------
+Step 2.1: Open a terminal in the project root directory:
+  d:\personal\projects\ReconAI
+
+Step 2.2: (Optional) Activate your Python virtual environment:
+  .\venv\Scripts\activate
+
+Step 2.3: Install backend dependencies (if not already installed):
+  pip install -r backend/requirements.txt
+
+Step 2.4: Configure Environment Variables:
+  Create a `.env` file in the root or `backend/` directory (or use default development settings):
+    DATABASE_URL=postgresql://postgres:postgres@localhost:5432/recon_ai
+    # (Optional for LLM reasoning; deterministic fallback is built-in):
+    GROQ_API_KEY=your_groq_api_key_here
+    LLM_MODEL=llama-3.3-70b-versatile
+    LLM_TIMEOUT_SECONDS=30
+
+Step 2.5: Start the FastAPI Backend Server (from project root d:\personal\projects\ReconAI):
+  cd d:\personal\projects\ReconAI
+  python -m uvicorn backend.main:app --reload --port 8000
+
+  - API Server: http://localhost:8000
+  - Interactive Swagger Docs: http://localhost:8000/docs
+  - Health Check: http://localhost:8000/health
+
+--------------------------------------------------------------------------------
+3. FRONTEND SETUP & RUNNING
+--------------------------------------------------------------------------------
+Step 3.1: Open a new terminal and navigate to the frontend folder:
+  cd frontend
+
+Step 3.2: Install frontend dependencies (if not already installed):
+  npm install
+
+Step 3.3: Start the Vite Frontend Development Server:
+  npm run dev
+
+  - Web Application UI: http://localhost:5173
+
+Step 3.4: Build frontend for production (optional check):
+  npm run build
+
+--------------------------------------------------------------------------------
+4. RUNNING AUTOMATED TESTS
+--------------------------------------------------------------------------------
+From the project root:
+  pytest -vv
+
+  This runs all 6 test suites including:
+  - test_health.py (API health check)
+  - test_models.py (SQLAlchemy schema & constraints)
+  - test_ingestion.py (CSV parsing & error handling)
+  - test_matching.py (Deterministic matching & 409 double-action guard)
+  - test_full_pipeline.py (End-to-end reconciliation flow with synthetic data)
+
+--------------------------------------------------------------------------------
+5. STEP-BY-STEP WORKFLOW IN THE UI
+--------------------------------------------------------------------------------
+1. Open http://localhost:5173 in your browser.
+2. In the "Upload Files" panel:
+   - Select Settlement File: data/synthetic_batch.csv
+   - Select Ledger File: data/ledger.csv
+   - Tolerance: 2 seconds (default)
+   - Click "Upload & Ingest Batch"
+3. In the Pipeline Stepper, click "Run Deterministic Matching":
+   - Automatically matches ~80% of clean records.
+4. Click "Run AI Reasoning":
+   - Analyzes discrepancy exceptions (MDR, GST, refunds, surcharges).
+5. Review Reasoning Cards:
+   - Expand math calculation breakdown (billed, MDR fee%, GST, expected vs actual).
+   - Click "Approve" (posts journal entry) or "Reject" (with override note).
+6. View Audit Log & Accuracy Report:
+   - Click "Audit Trail" tab to view immutable compliance logs.
+   - Click "Accuracy Report" button in header to verify 100% ground truth match.
+================================================================================

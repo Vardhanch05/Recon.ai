@@ -1,0 +1,30 @@
+File Summary (One-Paragraph Note)
+backend/reasoning.py is the AI discrepancy intelligence and deterministic mathematical verification engine. 
+It resolves the ~20% of financial exceptions that cannot be matched deterministically by testing financial hypotheses (Domestic/International MDR, GST on fees, flat surcharges, partial refunds, combined causes, and FX rounding). 
+It enforces mathematical integrity via calculate_difference()—prohibiting the LLM from mental arithmetic—and computes confidence scores strictly from the mathematical residual_gap via compute_confidence(). Furthermore, validate_card() 
+acts as a server-side guard that overrides any hallucinations before storing ReasoningCard entries and updating batch metrics.
+
+🔑 Key Concepts, Types & Functions Used
+
+1. compute_confidence(residual_gap)
+   The mathematical single source of truth for confidence scores (0.0 to 0.99). Never trusts LLM self-reported scores.
+
+2. calculate_difference(billed, settled, fee_pct, gst_pct, surcharge, refund, fx)
+   Isolated deterministic arithmetic tool. Evaluates (expected = billed - fee - gst - surcharge - refund + fx) and calculates residual_gap = settled - expected.
+
+3. validate_card(card)
+   Server-side validation interceptor. Intercepts reasoning outputs before database write: if residual_gap > 0.50, forces suggested_category = "UNRESOLVED" and requires_human_review = True.
+
+4. evaluate_hypotheses_deterministically(...)
+   Systematically evaluates known merchant fee schedules to explain shortfalls with exact paisa precision.
+
+5. run_batch_reasoning_pipeline(batch_id, db_session_factory)
+   Async background worker that loops through batch exceptions, creates ReasoningCard records, updates ReconciliationResult statuses (matched_ai_resolved vs exception_unresolved), and logs immutable llm_call audit events.
+
+💡 Explainability Tip for Interviews / Project Reviews
+If asked: "How do you prevent LLM hallucinations and calculation errors in financial reconciliation?"
+Your answer:
+"In reasoning.py, we enforce two critical architectural invariants: 
+First, we isolate math completely using a deterministic calculate_difference tool—the LLM is never allowed to perform mental arithmetic. 
+Second, confidence scores are never self-reported by the model; they are computed server-side from the exact mathematical residual_gap via 
+compute_confidence(). If a residual gap exceeds 50 paise, validate_card() automatically forces the transaction into the UNRESOLVED queue for human review."

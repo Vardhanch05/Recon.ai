@@ -53,6 +53,5 @@ frontend/build/
 .DS_Store
 Thumbs.db
 
-# Archive & Local Scratch
-archive/
+# Local Scratch
 trash/
