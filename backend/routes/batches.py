@@ -233,7 +233,7 @@ def get_batch_audit_log(
             query = query.filter(AuditLog.event_type == parsed_type)
         except ValueError:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=422,
                 detail=f"Invalid event_type '{event_type}'. Valid values are: {[e.value for e in AuditEventType]}"
             )
     

@@ -190,7 +190,7 @@ def list_exceptions(
             base_filter.append(ReconciliationResult.status == parsed_status)
         except ValueError:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=422,
                 detail=f"Invalid status filter '{status_filter}'."
             )
 
